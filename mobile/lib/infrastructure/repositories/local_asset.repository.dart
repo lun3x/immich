@@ -110,6 +110,67 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
         return true;
       });
 
+  Future<bool> claimRawPairTask(
+    String localId,
+    RawPairReceipt scope,
+    PhotoResourceRole role,
+    String taskId,
+  ) => _db.transaction(() async {
+    if (!await isRawPairScopeCurrent(scope)) {
+      return false;
+    }
+    var asset = await getById(localId);
+    if (asset?.rawPairDiscovery != RawPairDiscovery.present || asset?.rawJpegPair?.pairKey != scope.pairKey) {
+      return false;
+    }
+    final receipt = asset!.rawPairReceipt;
+    if (receipt?.serverEndpoint != scope.serverEndpoint ||
+        receipt?.ownerId != scope.ownerId ||
+        receipt?.pairKey != scope.pairKey) {
+      if (!await saveRawPairReceipt(localId, scope)) {
+        return false;
+      }
+      asset = await getById(localId);
+    }
+    final task = role == PhotoResourceRole.raw ? asset!.rawPairReceipt?.rawTaskId : asset!.rawPairReceipt?.jpegTaskId;
+    if (task != null || asset.rawPairReceipt?.completed == true) {
+      return false;
+    }
+    final column = role == PhotoResourceRole.raw
+        ? _db.localAssetEntity.rawReceiptRawTaskId
+        : _db.localAssetEntity.rawReceiptJpegTaskId;
+    final changed = await (_db.localAssetEntity.update()..where((e) => e.id.equals(localId) & column.isNull())).write(
+      role == PhotoResourceRole.raw
+          ? LocalAssetEntityCompanion(rawReceiptRawTaskId: Value(taskId))
+          : LocalAssetEntityCompanion(rawReceiptJpegTaskId: Value(taskId)),
+    );
+    return changed == 1;
+  });
+
+  Future<void> releaseRawPairTaskClaim(
+    String localId,
+    RawPairReceipt scope,
+    PhotoResourceRole role,
+    String taskId,
+  ) async {
+    final column = role == PhotoResourceRole.raw
+        ? _db.localAssetEntity.rawReceiptRawTaskId
+        : _db.localAssetEntity.rawReceiptJpegTaskId;
+    await (_db.localAssetEntity.update()..where(
+          (e) =>
+              e.id.equals(localId) &
+              e.rawReceiptServer.equals(scope.serverEndpoint) &
+              e.rawReceiptUserId.equals(scope.ownerId) &
+              e.rawReceiptPairKey.equals(scope.pairKey) &
+              column.equals(taskId),
+        ))
+        .write(
+          role == PhotoResourceRole.raw
+              ? const LocalAssetEntityCompanion(rawReceiptRawTaskId: Value(null))
+              : const LocalAssetEntityCompanion(rawReceiptJpegTaskId: Value(null)),
+        );
+  }
+
   Future<RawPairReceipt> getRawPairScope(String pairKey) async {
     final stored =
         await (_db.storeEntity.select()..where((e) => e.id.isIn([StoreKey.currentUser.id, StoreKey.serverEndpoint.id])))
@@ -138,6 +199,13 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
     if (asset?.rawPairDiscovery != RawPairDiscovery.present || asset?.rawJpegPair?.pairKey != receipt.pairKey) {
       return false;
     }
+    final old = asset!.rawPairReceipt;
+    final sameScope =
+        old?.serverEndpoint == receipt.serverEndpoint &&
+        old?.ownerId == receipt.ownerId &&
+        old?.pairKey == receipt.pairKey;
+    final alreadyCompleted =
+        sameScope && old?.completed == true && old?.rawId == receipt.rawId && old?.jpegId == receipt.jpegId;
     await (_db.localAssetEntity.update()..where((e) => e.id.equals(localId))).write(
       LocalAssetEntityCompanion(
         rawReceiptServer: Value(receipt.serverEndpoint),
@@ -145,9 +213,9 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
         rawReceiptPairKey: Value(receipt.pairKey),
         rawReceiptRawId: Value(receipt.rawId),
         rawReceiptJpegId: Value(receipt.jpegId),
-        rawReceiptRawTaskId: Value(receipt.rawTaskId),
-        rawReceiptJpegTaskId: Value(receipt.jpegTaskId),
-        rawPairCompleted: Value(receipt.completed),
+        rawReceiptRawTaskId: sameScope ? const Value.absent() : Value(receipt.rawTaskId),
+        rawReceiptJpegTaskId: sameScope ? const Value.absent() : Value(receipt.jpegTaskId),
+        rawPairCompleted: Value(receipt.completed || alreadyCompleted),
       ),
     );
     return true;

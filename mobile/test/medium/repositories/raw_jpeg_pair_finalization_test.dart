@@ -67,6 +67,28 @@ void main() {
     expect(ids.jpegId, 'jpeg-id');
     expect(ids.rawId, isNull);
   });
+  test('fresh missing RAW invalidates a completed receipt for retry', () async {
+    await local.saveRawPairReceipt(
+      asset.id,
+      const RawPairReceipt(
+        serverEndpoint: 'https://photos.example/api',
+        ownerId: 'owner',
+        pairKey: 'revision-1',
+        rawId: 'raw-id',
+        jpegId: 'jpeg-id',
+        completed: true,
+      ),
+    );
+    when(() => mocks.assetApi.api.checkUploadChecksums(any())).thenAnswer(
+      (_) async => {'jpeg': (assetId: 'jpeg-id', isTrashed: false), 'raw': (assetId: null, isTrashed: false)},
+    );
+    await sut.resolveRawPairRemoteIds(asset);
+    final receipt = (await local.getById(asset.id))!.rawPairReceipt!;
+    expect(receipt.completed, isFalse);
+    expect(receipt.rawId, isNull);
+    expect(receipt.jpegId, 'jpeg-id');
+  });
+
   test('trashed RAW is not reusable presence', () async {
     when(() => mocks.assetApi.api.checkUploadChecksums(any())).thenAnswer(
       (_) async => {'jpeg': (assetId: 'jpeg-id', isTrashed: false), 'raw': (assetId: 'raw-id', isTrashed: true)},

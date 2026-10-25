@@ -239,7 +239,7 @@ Assert exact selected filenames/bytes, only processed upload has cloud metadata,
 
 Add `LocalAssetRepository.claimRawPairTask(String localId, RawPairReceipt scope, PhotoResourceRole role, String taskId) -> Future<bool>` and `releaseRawPairTaskClaim(String localId, RawPairReceipt scope, PhotoResourceRole role, String taskId) -> Future<void>`. Claims compare account/server/pair key and the current role task ID atomically. After a crash, reconcile a retained claim with the persistent queue/database; if no task exists, release the matching claim and retry the same deterministic task ID. A stale claimant cannot clear a newer claim.
 
-- [ ] **Step 1: Write failing background tests.** Feed captured completion callbacks exactly as the current Live Photo tests do:
+- [x] **Step 1: Write failing background tests.** Feed captured completion callbacks exactly as the current Live Photo tests do:
 
 ```dart
 // RAW completion queues processed only when missing; existing JPEG goes directly to finalization.
@@ -254,10 +254,10 @@ Add `LocalAssetRepository.claimRawPairTask(String localId, RawPairReceipt scope,
 
 Test Wi-Fi requirements, task failures/cancellation, component-specific filenames and IDs, one cloud metadata owner, and pending export ownership. Existing Live Photo tests must still pass. Metadata from pre-change queued tasks may be explicitly cancelled/rebuilt under the current format; do not add a compatibility parser for old metadata.
 
-- [ ] **Step 2: Run to confirm failure.** From `mobile`: `flutter test test/services/background_upload.service_test.dart test/providers/backup/backup_provider_test.dart test/domain/services/background_worker_service_test.dart`.
-- [ ] **Step 3: Implement the callback chain.** Before queueing, prepare/hash and skip components with confirmed live remote IDs. RAW completion validates task/account/resource scope, records live presence, then queues the processed task or finalizes an existing JPEG. Processed completion finalizes before reporting item success. Reconcile active tasks and stored receipts on restart rather than relying on one callback being delivered; claim dependent work using a compare-and-set transaction against the current receipt/task state and deduplicate against the persistent queue's deterministic IDs. Route pair callbacks outside the ordinary edited-stack callback. Delay pair temporary-file deletion until the owning task is complete/cancelled, and stop broad cache clearing from deleting files of active tasks when starting/resuming another batch.
-- [ ] **Step 4: Rerun those tests.** Expect pending pairs to survive missed/duplicate callbacks, app restart, and switches between the existing foreground/background modes.
-- [ ] **Step 5: Commit:** `jj commit -m 'feat(mobile): chain and recover background RAW pair uploads'`.
+- [x] **Step 2: Run to confirm failure.** From `mobile`: `flutter test test/services/background_upload.service_test.dart test/providers/backup/backup_provider_test.dart test/domain/services/background_worker_service_test.dart`.
+- [x] **Step 3: Implement the callback chain.** Before queueing, prepare/hash and skip components with confirmed live remote IDs. RAW completion validates task/account/resource scope, records live presence, then queues the processed task or finalizes an existing JPEG. Processed completion finalizes before reporting item success. Reconcile active tasks and stored receipts on restart rather than relying on one callback being delivered; claim dependent work using a compare-and-set transaction against the current receipt/task state and deduplicate against the persistent queue's deterministic IDs. Route pair callbacks outside the ordinary edited-stack callback. Delay pair temporary-file deletion until the owning task is complete/cancelled, and stop broad cache clearing from deleting files of active tasks when starting/resuming another batch.
+- [x] **Step 4: Rerun those tests.** Expect pending pairs to survive missed/duplicate callbacks, app restart, and switches between the existing foreground/background modes.
+- [x] **Step 5: Commit:** `jj commit -m 'feat(mobile): chain and recover background RAW pair uploads'`.
 
 ## Task 8: Verify the integrated feature and document device evidence
 

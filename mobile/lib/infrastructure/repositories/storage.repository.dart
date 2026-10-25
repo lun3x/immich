@@ -1,5 +1,3 @@
-// ignore_for_file: avoid_slow_async_io
-
 import 'dart:async';
 import 'dart:io';
 
@@ -11,6 +9,8 @@ import 'package:immich_mobile/platform/native_sync_api.g.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
+
+// ignore_for_file: avoid_slow_async_io
 
 class StorageRepository {
   final log = Logger('StorageRepository');
@@ -205,24 +205,16 @@ class StorageRepository {
   }
 
   Future<void> clearCache() async {
+    // iOS cache files may still belong to persistent URLSession upload tasks.
+    if (CurrentPlatform.isIOS) {
+      return;
+    }
     final log = Logger('StorageRepository');
 
     try {
       await PhotoManager.clearFileCache();
     } catch (error, stackTrace) {
       log.warning("Error clearing cache", error, stackTrace);
-    }
-
-    if (!CurrentPlatform.isIOS) {
-      return;
-    }
-
-    try {
-      if (await Directory.systemTemp.exists()) {
-        await Directory.systemTemp.delete(recursive: true);
-      }
-    } catch (error, stackTrace) {
-      log.warning("Error deleting temporary directory", error, stackTrace);
     }
   }
 }
