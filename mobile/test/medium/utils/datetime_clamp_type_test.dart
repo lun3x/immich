@@ -56,9 +56,12 @@ void main() {
     addTearDown(db.close);
     await verifier.migrateAndValidate(db, 34);
 
-    final row = await (db.select(db.localAssetEntity)..where((t) => t.id.equals('a'))).getSingle();
-    expect(row.createdAt, DateTime.utc(9999, 12, 31));
-    expect(row.updatedAt, DateTime.utc(1));
+    // This test intentionally stops at v34, so query the columns in that schema directly.
+    final row = await db
+        .customSelect("SELECT created_at, updated_at FROM local_asset_entity WHERE id = 'a'")
+        .getSingle();
+    expect(DateTime.parse(row.read<String>('created_at')), DateTime.utc(9999, 12, 31));
+    expect(DateTime.parse(row.read<String>('updated_at')), DateTime.utc(1));
   });
 
   test('timeline buckets a clamped date instead of crashing', () async {
