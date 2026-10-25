@@ -108,7 +108,7 @@ void main() {
     expect(await backup.getCandidates('owner'), isEmpty);
     expect((await assets.getRemovalCandidates('owner', cutoff)).assets.map((a) => a.id), [local.id]);
   });
-  test('trash deletion and reset invalidate receipt completion', () async {
+  test('deletion invalidates completion and reset retains the invalidated receipt', () async {
     await complete();
     await SyncStreamRepository(ctx.db).deleteAssetsV1([SyncAssetDeleteV1(assetId: 'remote-raw')]);
     final receipt = (await assets.getById(local.id))!.rawPairReceipt!;
@@ -117,7 +117,19 @@ void main() {
     expect(receipt.completed, isFalse);
     expect(await backup.getAllCounts('owner'), (total: 1, remainder: 1, processing: 0));
     await SyncStreamRepository(ctx.db).reset();
-    expect((await assets.getById(local.id))!.rawPairReceipt, isNull);
+    expect((await assets.getById(local.id))!.rawPairReceipt, receipt);
+  });
+  test('reset retains completion history but requires remote presence for backup and cleanup', () async {
+    await complete();
+    await SyncStreamRepository(ctx.db).reset();
+    expect((await assets.getById(local.id))!.rawPairReceipt!.completed, isTrue);
+    expect((await backup.getAllCounts('owner')).remainder, 1);
+    expect((await assets.getRemovalCandidates('owner', cutoff)).assets, isEmpty);
+    await ctx.newUser(id: 'owner');
+    await ctx.newAuthUser(id: 'owner');
+    await ctx.newRemoteAsset(id: 'remote-jpeg', ownerId: 'owner', checksum: 'jpeg-hash');
+    await ctx.newRemoteAsset(id: 'remote-raw', ownerId: 'owner', checksum: 'raw-hash');
+    expect((await backup.getAllCounts('owner')).remainder, 0);
   });
   test('authoritative trash update invalidates RAW receipt and cleanup', () async {
     await complete();

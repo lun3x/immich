@@ -173,9 +173,12 @@ abstract class NativeSyncApi {
 
   @async
   List<PhotoResourceHashResult> hashPhotoResources(
-    List<PhotoResourceRequest> requests, {
+    List<PhotoResourceRequest> requests,
+    String operationId, {
     bool allowNetworkAccess = false,
   });
+
+  void cancelPhotoResourceHashing(String operationId);
 
   @async
   String exportPhotoResource(PhotoResourceRequest request, String destinationPath, {bool allowNetworkAccess = false});

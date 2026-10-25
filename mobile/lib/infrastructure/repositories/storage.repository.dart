@@ -9,6 +9,7 @@ import 'package:immich_mobile/platform/native_sync_api.g.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
+import 'package:uuid/uuid.dart';
 
 // ignore_for_file: avoid_slow_async_io
 
@@ -38,7 +39,36 @@ class StorageRepository {
   Future<List<PhotoResourceHashResult>> hashPhotoResources(
     List<PhotoResourceRequest> requests, {
     required bool allowNetworkAccess,
-  }) => _nativeSyncApi.hashPhotoResources(requests, allowNetworkAccess: allowNetworkAccess);
+    Completer<void>? cancelToken,
+  }) async {
+    if (cancelToken?.isCompleted == true) {
+      throw PlatformException(code: 'HASH_CANCELLED');
+    }
+    final operationId = const Uuid().v4();
+    var finished = false;
+    // Send the hash request first: its host handler registers ownership before
+    // starting the PhotoKit read, including cancellation before request-ID assignment.
+    final hashing = _nativeSyncApi.hashPhotoResources(requests, operationId, allowNetworkAccess: allowNetworkAccess);
+    final cancellation = cancelToken?.future.then<List<PhotoResourceHashResult>>((_) async {
+      if (!finished) {
+        try {
+          await _nativeSyncApi.cancelPhotoResourceHashing(operationId);
+        } catch (error, stack) {
+          log.warning('Failed to cancel photo resource hashing', error, stack);
+        }
+      }
+      throw PlatformException(code: 'HASH_CANCELLED');
+    });
+    try {
+      final results = await Future.any([hashing, ?cancellation]);
+      if (cancelToken?.isCompleted == true) {
+        throw PlatformException(code: 'HASH_CANCELLED');
+      }
+      return results;
+    } finally {
+      finished = true;
+    }
+  }
 
   Future<File> exportPhotoResource(
     PhotoResourceRequest request, {

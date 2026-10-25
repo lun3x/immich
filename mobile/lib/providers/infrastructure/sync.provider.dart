@@ -43,6 +43,7 @@ final localSyncServiceProvider = Provider((ref) {
 final hashServiceProvider = Provider((ref) {
   final db = ref.watch(driftProvider);
   return HashService(
+    connectivityApi: ref.watch(connectivityApiProvider),
     assetService: ref.watch(assetServiceProvider),
     localAlbumRepository: db.localAlbumRepository,
     localAssetRepository: db.localAssetRepository,
