@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/asset_edit.model.dart';
 import 'package:immich_mobile/domain/models/exif.model.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
@@ -9,6 +12,7 @@ import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_asset.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_exif.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/storage.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/trashed_local_asset.repository.dart';
 import 'package:immich_mobile/repositories/asset_api.repository.dart';
 import 'package:immich_mobile/repositories/asset_media.repository.dart';
@@ -16,6 +20,7 @@ import 'package:immich_mobile/utils/option.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 class AssetService {
+  final StorageRepository _storageRepository;
   final RemoteAssetRepository _remoteRepository;
   final RemoteExifRepository _exifRepository;
   final LocalAssetRepository _localRepository;
@@ -24,6 +29,7 @@ class AssetService {
   final TrashedLocalAssetRepository _trashedLocalRepository;
 
   const AssetService({
+    required this._storageRepository,
     required this._remoteRepository,
     required this._exifRepository,
     required this._localRepository,
@@ -31,6 +37,73 @@ class AssetService {
     required this._mediaRepository,
     required this._trashedLocalRepository,
   });
+
+  Future<LocalAsset> inspectRawJpegPair(LocalAsset asset) async {
+    if (!CurrentPlatform.isIOS || asset.type != AssetType.image) {
+      return asset;
+    }
+    final current = await _localRepository.getById(asset.id) ?? asset;
+    if (current.rawPairDiscovery != RawPairDiscovery.unknown) {
+      return current;
+    }
+    try {
+      final pair = await _storageRepository.getRawJpegPair(asset.id);
+      await _localRepository.saveRawPairDiscovery(asset.id, pair);
+      return await _localRepository.getById(asset.id) ?? (throw StateError('Photos item no longer exists'));
+    } catch (_) {
+      await _localRepository.markRawPairDiscoveryUnknown(asset.id);
+      rethrow;
+    }
+  }
+
+  Future<LocalAsset> prepareRawJpegPair(
+    LocalAsset asset, {
+    required bool allowNetworkAccess,
+    Completer<void>? cancelToken,
+  }) async {
+    final current = await inspectRawJpegPair(asset);
+    if (!CurrentPlatform.isIOS || current.rawPairDiscovery != RawPairDiscovery.present) {
+      return current;
+    }
+    final pair = current.rawJpegPair!;
+    if (cancelToken?.isCompleted == true) {
+      throw StateError('Photo resource hashing cancelled');
+    }
+    final requests = [
+      if (current.checksum == null) pair.request(PhotoResourceRole.processed),
+      if (current.rawChecksum == null) pair.request(PhotoResourceRole.raw),
+    ];
+    if (requests.isEmpty) {
+      return current;
+    }
+    final results = await _storageRepository.hashPhotoResources(requests, allowNetworkAccess: allowNetworkAccess);
+    if (cancelToken?.isCompleted == true) {
+      throw StateError('Photo resource hashing cancelled');
+    }
+    String? jpegHash;
+    String? rawHash;
+    for (final request in requests) {
+      final matching = results.where((r) => r.assetId == asset.id && r.resourceKey == request.resource.key).toList();
+      if (matching.length != 1 || matching.single.hash == null || matching.single.error != null) {
+        continue;
+      }
+      if (request.resource.key == pair.processed.key) {
+        jpegHash = matching.single.hash;
+      }
+      if (request.resource.key == pair.rawOriginal.key) {
+        rawHash = matching.single.hash;
+      }
+    }
+    if (!await _localRepository.saveRawPairHashes(
+      asset.id,
+      pair.pairKey,
+      jpegChecksum: jpegHash,
+      rawChecksum: rawHash,
+    )) {
+      throw StateError('Photo resources changed while hashing');
+    }
+    return (await _localRepository.getById(asset.id))!;
+  }
 
   Future<BaseAsset?> getAsset(BaseAsset asset) {
     final id = asset is LocalAsset ? asset.id : (asset as RemoteAsset).id;

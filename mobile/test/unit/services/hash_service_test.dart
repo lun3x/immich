@@ -1,19 +1,24 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/services/hash.service.dart';
 import 'package:immich_mobile/platform/native_sync_api.g.dart';
 import 'package:mocktail/mocktail.dart';
 
+import '../../service.mocks.dart';
 import '../factories/local_album_factory.dart';
 import '../factories/local_asset_factory.dart';
 import '../mocks.dart';
 
 void main() {
   late HashService sut;
+  final assetService = MockAssetService();
   final mocks = RepositoryMocks();
 
   setUp(() {
     sut = HashService(
+      assetService: assetService,
       localAlbumRepository: mocks.localAlbum.repo,
       localAssetRepository: mocks.localAsset.repo,
       nativeSyncApi: mocks.nativeApi.api,
@@ -23,6 +28,27 @@ void main() {
 
   tearDown(() {
     mocks.resetAll();
+    reset(assetService);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  test('already uploaded JPEG discovers its pair once across albums, excluded album does no pair work', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final asset = LocalAssetFactory.create().copyWith(rawPairDiscovery: RawPairDiscovery.unknown);
+    final first = LocalAlbumFactory.create(backupSelection: BackupSelection.selected);
+    final second = LocalAlbumFactory.create(backupSelection: BackupSelection.selected);
+    final excluded = LocalAlbumFactory.create(backupSelection: BackupSelection.excluded);
+    when(() => mocks.localAlbum.repo.getBackupAlbums()).thenAnswer((_) async => [first, second, excluded]);
+    for (final album in [first, second]) {
+      when(() => mocks.localAlbum.repo.getAssetsToDiscoverRawPairs(album.id)).thenAnswer((_) async => [asset]);
+    }
+    when(
+      () => assetService.prepareRawJpegPair(asset, allowNetworkAccess: true, cancelToken: null),
+    ).thenAnswer((_) async => asset);
+    await sut.hashAssets();
+    verify(() => assetService.prepareRawJpegPair(asset, allowNetworkAccess: true, cancelToken: null)).called(1);
+    verifyNever(() => mocks.localAlbum.repo.getAssetsToDiscoverRawPairs(excluded.id));
+    verifyNever(mocks.nativeApi.hashAssets);
   });
 
   group('HashService', () {
@@ -102,6 +128,7 @@ void main() {
       test('batches by size limit', () async {
         const batchSize = 2;
         final sut = HashService(
+          assetService: assetService,
           localAlbumRepository: mocks.localAlbum.repo,
           localAssetRepository: mocks.localAsset.repo,
           nativeSyncApi: mocks.nativeApi.api,

@@ -1,5 +1,35 @@
 import 'package:immich_mobile/platform/native_sync_api.g.dart';
 
+enum RawPairDiscovery { unknown, absent, present }
+
+class RawPairReceipt {
+  final String serverEndpoint;
+  final String ownerId;
+  final String pairKey;
+  final String? rawId;
+  final String? jpegId;
+  final String? rawTaskId;
+  final String? jpegTaskId;
+  final bool completed;
+
+  const RawPairReceipt({
+    required this.serverEndpoint,
+    required this.ownerId,
+    required this.pairKey,
+    this.rawId,
+    this.jpegId,
+    this.rawTaskId,
+    this.jpegTaskId,
+    this.completed = false,
+  });
+
+  Object get _identity => (serverEndpoint, ownerId, pairKey, rawId, jpegId, rawTaskId, jpegTaskId, completed);
+  @override
+  bool operator ==(Object other) => other is RawPairReceipt && _identity == other._identity;
+  @override
+  int get hashCode => _identity.hashCode;
+}
+
 enum PhotoResourceRole { processed, raw }
 
 class PhotoResource {
@@ -78,6 +108,11 @@ class RawJpegPair {
     'rawOriginal': rawOriginal.toMap(),
     'processed': processed.toMap(),
   };
+
+  @override
+  bool operator ==(Object other) => other is RawJpegPair && assetId == other.assetId && pairKey == other.pairKey;
+  @override
+  int get hashCode => Object.hash(assetId, pairKey);
 
   PhotoResourceRequest request(PhotoResourceRole role) => PhotoResourceRequest(
     assetId: assetId,

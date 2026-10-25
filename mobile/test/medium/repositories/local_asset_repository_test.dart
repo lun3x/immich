@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
 import 'package:immich_mobile/utils/option.dart';
 
@@ -467,6 +468,8 @@ void main() {
       await sut.reconcileHashesFromCloudId();
       final updated = await sut.getById(localAsset.id);
       expect(updated?.checksum, remoteAsset.checksum);
+      expect(updated?.rawPairDiscovery, RawPairDiscovery.unknown);
+      expect(updated?.rawChecksum, isNull);
     });
 
     test('does not update when local asset already has checksum', () async {
