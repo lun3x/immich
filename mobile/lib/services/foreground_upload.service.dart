@@ -443,7 +443,8 @@ class ForegroundUploadService {
       }
     }
 
-    final ids = await _assetService.resolveRawPairRemoteIds(asset);
+    final scope = RawPairReceipt(serverEndpoint: endpoint, ownerId: owner, pairKey: pair.pairKey);
+    final ids = await _assetService.resolveRawPairRemoteIds(asset, expectedScope: scope);
     ids.requireNoTrash();
     String? jpegId = ids.jpegId;
     String? rawId = ids.rawId;
@@ -508,7 +509,12 @@ class ForegroundUploadService {
           throw StateError(result.errorMessage ?? 'Photo resource upload failed');
         }
         checkCurrent();
-        await _assetService.recordRawPairUpload(asset, role: role, remoteId: result.remoteAssetId!);
+        await _assetService.recordRawPairUpload(
+          asset,
+          role: role,
+          remoteId: result.remoteAssetId!,
+          expectedScope: scope,
+        );
         if (role == PhotoResourceRole.raw) {
           rawId = result.remoteAssetId;
         } else {
@@ -525,7 +531,7 @@ class ForegroundUploadService {
       }
     }
     checkCurrent();
-    await _assetService.finalizeRawJpegPair(asset, jpegId: jpegId!, rawId: rawId!);
+    await _assetService.finalizeRawJpegPair(asset, jpegId: jpegId!, rawId: rawId!, expectedScope: scope);
     checkCurrent();
     callbacks.onSuccess?.call(asset.id, jpegId);
   }

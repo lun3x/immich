@@ -163,7 +163,9 @@ void main() {
           cancelToken: any(named: 'cancelToken'),
         ),
       ).thenAnswer((_) async => pairAsset);
-      when(() => mockAssetService.resolveRawPairRemoteIds(pairAsset)).thenAnswer(
+      when(
+        () => mockAssetService.resolveRawPairRemoteIds(pairAsset, expectedScope: any(named: 'expectedScope')),
+      ).thenAnswer(
         (_) async =>
             RawPairRemoteIds(jpegId: remote[PhotoResourceRole.processed], rawId: remote[PhotoResourceRole.raw]),
       );
@@ -201,12 +203,18 @@ void main() {
           pairAsset,
           role: any(named: 'role'),
           remoteId: any(named: 'remoteId'),
+          expectedScope: any(named: 'expectedScope'),
         ),
       ).thenAnswer((i) async {
         remote[i.namedArguments[#role] as PhotoResourceRole] = i.namedArguments[#remoteId] as String;
       });
       when(
-        () => mockAssetService.finalizeRawJpegPair(pairAsset, jpegId: 'jpeg-id', rawId: 'raw-id'),
+        () => mockAssetService.finalizeRawJpegPair(
+          pairAsset,
+          jpegId: 'jpeg-id',
+          rawId: 'raw-id',
+          expectedScope: any(named: 'expectedScope'),
+        ),
       ).thenAnswer((_) async {});
     });
     tearDown(() async {
@@ -233,7 +241,14 @@ void main() {
       expect(errors, isEmpty);
       expect(fields.single.containsKey('metadata'), isFalse);
       expect(fields.single['visibility'], isNot('hidden'));
-      verify(() => mockAssetService.finalizeRawJpegPair(pairAsset, jpegId: 'jpeg-id', rawId: 'raw-id')).called(1);
+      verify(
+        () => mockAssetService.finalizeRawJpegPair(
+          pairAsset,
+          jpegId: 'jpeg-id',
+          rawId: 'raw-id',
+          expectedScope: any(named: 'expectedScope'),
+        ),
+      ).called(1);
       verifyNever(() => mockAssetService.stackEditedUpload(any(), any(), any()));
       expect(files.single.existsSync(), isFalse);
     });
@@ -263,6 +278,7 @@ void main() {
           any(),
           jpegId: any(named: 'jpegId'),
           rawId: any(named: 'rawId'),
+          expectedScope: any(named: 'expectedScope'),
         ),
       );
     });
@@ -278,14 +294,24 @@ void main() {
     });
     test('stack failure retries finalization without uploading either file again', () async {
       when(
-        () => mockAssetService.finalizeRawJpegPair(pairAsset, jpegId: 'jpeg-id', rawId: 'raw-id'),
+        () => mockAssetService.finalizeRawJpegPair(
+          pairAsset,
+          jpegId: 'jpeg-id',
+          rawId: 'raw-id',
+          expectedScope: any(named: 'expectedScope'),
+        ),
       ).thenThrow(StateError('conflict'));
       await upload();
       expect(filenames, ['IMG.RAF', 'IMG.JPG']);
       expect(success, isEmpty);
       expect(errors, hasLength(1));
       when(
-        () => mockAssetService.finalizeRawJpegPair(pairAsset, jpegId: 'jpeg-id', rawId: 'raw-id'),
+        () => mockAssetService.finalizeRawJpegPair(
+          pairAsset,
+          jpegId: 'jpeg-id',
+          rawId: 'raw-id',
+          expectedScope: any(named: 'expectedScope'),
+        ),
       ).thenAnswer((_) async {});
       await upload();
       expect(filenames, ['IMG.RAF', 'IMG.JPG']);
@@ -293,7 +319,7 @@ void main() {
     });
     test('trashed RAW returns backup error without any upload', () async {
       when(
-        () => mockAssetService.resolveRawPairRemoteIds(pairAsset),
+        () => mockAssetService.resolveRawPairRemoteIds(pairAsset, expectedScope: any(named: 'expectedScope')),
       ).thenAnswer((_) async => const RawPairRemoteIds(jpegId: 'jpeg-id', rawTrashed: true));
       await upload();
       expect(filenames, isEmpty);

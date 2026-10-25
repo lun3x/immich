@@ -122,8 +122,8 @@ class AssetService {
     return current!;
   }
 
-  Future<RawPairRemoteIds> resolveRawPairRemoteIds(LocalAsset asset) async {
-    final scope = await _localRepository.getRawPairScope(asset.rawJpegPair?.pairKey ?? '');
+  Future<RawPairRemoteIds> resolveRawPairRemoteIds(LocalAsset asset, {RawPairReceipt? expectedScope}) async {
+    final scope = expectedScope ?? await _localRepository.getRawPairScope(asset.rawJpegPair?.pairKey ?? '');
     await _assertRawPairCurrent(asset, scope);
     final result = await _apiRepository.checkUploadChecksums({'jpeg': asset.checksum!, 'raw': asset.rawChecksum!});
     await _assertRawPairCurrent(asset, scope);
@@ -132,12 +132,24 @@ class AssetService {
     if (jpeg == null || raw == null) {
       throw StateError('Incomplete resource presence check');
     }
-    return RawPairRemoteIds(
+    final ids = RawPairRemoteIds(
       jpegId: jpeg.isTrashed ? null : jpeg.assetId,
       rawId: raw.isTrashed ? null : raw.assetId,
       jpegTrashed: jpeg.isTrashed,
       rawTrashed: raw.isTrashed,
     );
+    final current = await _assertRawPairCurrent(asset, scope);
+    final old = current.rawPairReceipt;
+    if (old != null &&
+        old.serverEndpoint == scope.serverEndpoint &&
+        old.ownerId == scope.ownerId &&
+        old.pairKey == scope.pairKey &&
+        (old.rawId != ids.rawId || old.jpegId != ids.jpegId)) {
+      if (!await _localRepository.saveRawPairReceipt(asset.id, _rawPairReceipt(scope, current, ids))) {
+        throw StateError('Stale resource presence');
+      }
+    }
+    return ids;
   }
 
   RawPairReceipt _rawPairReceipt(
@@ -165,9 +177,10 @@ class AssetService {
     LocalAsset asset, {
     required PhotoResourceRole role,
     required String remoteId,
+    RawPairReceipt? expectedScope,
   }) async {
-    final scope = await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
-    final ids = await resolveRawPairRemoteIds(asset);
+    final scope = expectedScope ?? await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
+    final ids = await resolveRawPairRemoteIds(asset, expectedScope: scope);
     ids.requireNoTrash();
     if ((role == PhotoResourceRole.raw ? ids.rawId : ids.jpegId) != remoteId) {
       throw StateError('Uploaded resource could not be confirmed on the server');
@@ -196,8 +209,13 @@ class AssetService {
     );
   }
 
-  Future<void> finalizeRawJpegPair(LocalAsset asset, {required String jpegId, required String rawId}) async {
-    final scope = await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
+  Future<void> finalizeRawJpegPair(
+    LocalAsset asset, {
+    required String jpegId,
+    required String rawId,
+    RawPairReceipt? expectedScope,
+  }) async {
+    final scope = expectedScope ?? await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
     final lockKey = [scope.serverEndpoint, scope.ownerId, asset.id].join('|');
     final previous = _rawPairFinalizations[lockKey];
     final done = Completer<void>();
@@ -205,7 +223,7 @@ class AssetService {
     await previous;
     try {
       var current = await _assertRawPairCurrent(asset, scope);
-      final ids = await resolveRawPairRemoteIds(asset);
+      final ids = await resolveRawPairRemoteIds(asset, expectedScope: scope);
       ids.requireNoTrash();
       if (jpegId == rawId || ids.jpegId != jpegId || ids.rawId != rawId) {
         throw StateError('Both original resources must exist before stacking');
