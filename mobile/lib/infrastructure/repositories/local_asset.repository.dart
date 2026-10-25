@@ -13,13 +13,16 @@ import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
+import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.drift.dart';
+import 'package:immich_mobile/infrastructure/repositories/raw_pair_backup_predicate.dart';
 
 class RemovalCandidatesResult {
   final List<LocalAsset> assets;
   final int totalBytes;
+  final Map<String, int> assetBytes;
 
-  const RemovalCandidatesResult({required this.assets, required this.totalBytes});
+  const RemovalCandidatesResult({required this.assets, required this.totalBytes, this.assetBytes = const {}});
 }
 
 @DriftAccessor()
@@ -269,6 +272,53 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
     AssetKeepType keepMediaType = AssetKeepType.none,
     bool keepFavorites = true,
     Set<String> keepAlbumIds = const {},
+  }) => _getRemovalCandidates(
+    userId,
+    cutoffDate,
+    keepMediaType: keepMediaType,
+    keepFavorites: keepFavorites,
+    keepAlbumIds: keepAlbumIds,
+  );
+
+  Future<List<LocalAsset>> getAssetsToInspectForCleanup(
+    String userId,
+    DateTime cutoffDate, {
+    AssetKeepType keepMediaType = AssetKeepType.none,
+    bool keepFavorites = true,
+    Set<String> keepAlbumIds = const {},
+  }) async {
+    if (!CurrentPlatform.isIOS) {
+      return [];
+    }
+    return (await _getRemovalCandidates(
+      userId,
+      cutoffDate,
+      keepMediaType: keepMediaType,
+      keepFavorites: keepFavorites,
+      keepAlbumIds: keepAlbumIds,
+      inspectUnknown: true,
+    )).assets;
+  }
+
+  Future<bool> isBackupCompleteForCleanup(String localId) async {
+    final scope = await getRawPairScope('cleanup');
+    final query = _db.localAssetEntity.select()
+      ..where(
+        (e) =>
+            e.id.equals(localId) &
+            primaryBackupExists(_db, scope.ownerId) &
+            rawPairBackupComplete(_db, scope.ownerId, scope.serverEndpoint),
+      );
+    return await query.getSingleOrNull() != null;
+  }
+
+  Future<RemovalCandidatesResult> _getRemovalCandidates(
+    String userId,
+    DateTime cutoffDate, {
+    AssetKeepType keepMediaType = AssetKeepType.none,
+    bool keepFavorites = true,
+    Set<String> keepAlbumIds = const {},
+    bool inspectUnknown = false,
   }) async {
     final iosSharedAlbumAssets = _db.localAlbumAssetEntity.selectOnly()
       ..addColumns([_db.localAlbumAssetEntity.assetId])
@@ -314,6 +364,12 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
           whereClause & _db.localAssetEntity.isFavorite.equals(false) & _db.remoteAssetEntity.isFavorite.equals(false);
     }
 
+    whereClause =
+        whereClause &
+        (inspectUnknown
+            ? _db.localAssetEntity.type.equalsValue(AssetType.image) &
+                  _db.localAssetEntity.rawPairState.equalsValue(RawPairDiscovery.unknown)
+            : rawPairBackupComplete(_db, userId, await backupServerEndpoint(_db)));
     query.where(whereClause);
 
     final rows = await query.get();
@@ -323,7 +379,14 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
       return sum + (fileSize ?? 0);
     });
 
-    return RemovalCandidatesResult(assets: assets, totalBytes: totalBytes);
+    return RemovalCandidatesResult(
+      assets: assets,
+      totalBytes: totalBytes,
+      assetBytes: {
+        for (final row in rows)
+          row.readTable(_db.localAssetEntity).id: row.readTableOrNull(_db.remoteExifEntity)?.fileSize ?? 0,
+      },
+    );
   }
 
   Future<void> reconcileHashesFromCloudId() async {
