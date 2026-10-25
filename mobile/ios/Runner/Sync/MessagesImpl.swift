@@ -38,7 +38,7 @@ class NativeSyncApiImpl: ImmichPlugin, NativeSyncApi, FlutterPlugin {
   private var hashTask: Task<Void?, Error>?
   private let resourceExportLock = NSLock()
   private var resourceExports: [String: PhotoResourceDataRequest] = [:]
-  private var resourceHashes: [UUID: PhotoResourceDataRequest] = [:]
+  private var resourceHashes: [String: PhotoResourceDataRequest] = [:]
   private static let hashCancelledCode = "HASH_CANCELLED"
   private static let hashCancelled = Result<[HashResult], Error>.failure(PigeonError(code: hashCancelledCode, message: "Hashing cancelled", details: nil))
   
@@ -399,12 +399,13 @@ class NativeSyncApiImpl: ImmichPlugin, NativeSyncApi, FlutterPlugin {
     return resource
   }
 
-  func hashPhotoResources(requests: [PhotoResourceRequest], allowNetworkAccess: Bool, completion: @escaping (Result<[PhotoResourceHashResult], Error>) -> Void) {
-    let id = UUID()
+  func hashPhotoResources(requests: [PhotoResourceRequest], operationId: String, allowNetworkAccess: Bool, completion: @escaping (Result<[PhotoResourceHashResult], Error>) -> Void) {
     let transfer = PhotoResourceDataRequest()
-    setResourceHash(transfer, id: id)
+    // Register synchronously on the host channel before starting async work, so
+    // the following cancellation message can cancel even before a PhotoKit ID exists.
+    setResourceHash(transfer, id: operationId)
     Task { [self] in
-      defer { setResourceHash(nil, id: id) }
+      defer { setResourceHash(nil, id: operationId) }
       var results: [PhotoResourceHashResult] = []
       // Stream one resource at a time so a batch of large RAWs cannot exhaust memory.
       for request in requests {
@@ -428,10 +429,17 @@ class NativeSyncApiImpl: ImmichPlugin, NativeSyncApi, FlutterPlugin {
     }
   }
 
-  private func setResourceHash(_ transfer: PhotoResourceDataRequest?, id: UUID) {
+  private func setResourceHash(_ transfer: PhotoResourceDataRequest?, id: String) {
     resourceExportLock.lock()
     resourceHashes[id] = transfer
     resourceExportLock.unlock()
+  }
+
+  func cancelPhotoResourceHashing(operationId: String) {
+    resourceExportLock.lock()
+    let transfer = resourceHashes[operationId]
+    resourceExportLock.unlock()
+    transfer?.cancel()
   }
 
   private func cancelResourceHashes() {

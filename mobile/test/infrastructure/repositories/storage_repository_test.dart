@@ -126,6 +126,39 @@ void main() {
     expect(File(path).existsSync(), isFalse);
   });
 
+  test('cancels only its in-flight resource hash and returns without waiting for PhotoKit', () async {
+    final started = Completer<String>();
+    final pending = Completer<List<PhotoResourceHashResult>>();
+    final cancellation = Completer<void>();
+    when(() => native.hashPhotoResources(any(), any(), allowNetworkAccess: true)).thenAnswer((call) {
+      started.complete(call.positionalArguments[1] as String);
+      return pending.future;
+    });
+    when(() => native.cancelPhotoResourceHashing(any())).thenAnswer((_) async {});
+
+    final future = sut.hashPhotoResources([request], allowNetworkAccess: true, cancelToken: cancellation);
+    final assertion = expectLater(
+      future,
+      throwsA(isA<PlatformException>().having((e) => e.code, 'code', 'HASH_CANCELLED')),
+    );
+    final operation = await started.future;
+    cancellation.complete();
+    await assertion.timeout(const Duration(seconds: 1));
+
+    verify(() => native.cancelPhotoResourceHashing(operation)).called(1);
+    verifyNever(native.cancelHashing);
+    pending.completeError(PlatformException(code: 'HASH_CANCELLED'));
+  });
+
+  test('finished resource hash ignores later cancellation', () async {
+    final cancellation = Completer<void>();
+    when(() => native.hashPhotoResources(any(), any(), allowNetworkAccess: false)).thenAnswer((_) async => []);
+    await sut.hashPhotoResources([request], allowNetworkAccess: false, cancelToken: cancellation);
+    cancellation.complete();
+    await Future<void>.delayed(Duration.zero);
+    verifyNever(() => native.cancelPhotoResourceHashing(any()));
+  });
+
   test('serialized original evidence retains all resource identities', () {
     final pair = RawJpegPair(
       assetId: 'local',

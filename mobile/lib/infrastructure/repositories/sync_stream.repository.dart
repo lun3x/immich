@@ -59,18 +59,8 @@ class SyncStreamRepository extends DatabaseAccessor<Drift> with $SyncStreamRepos
             await _db.localAlbumEntity.update().write(
               const LocalAlbumEntityCompanion(linkedRemoteAlbumId: Value(null)),
             );
-            await _db.localAssetEntity.update().write(
-              const LocalAssetEntityCompanion(
-                rawReceiptServer: Value(null),
-                rawReceiptUserId: Value(null),
-                rawReceiptPairKey: Value(null),
-                rawReceiptRawId: Value(null),
-                rawReceiptJpegId: Value(null),
-                rawReceiptRawTaskId: Value(null),
-                rawReceiptJpegTaskId: Value(null),
-                rawPairCompleted: Value(false),
-              ),
-            );
+            // Retain scoped pair finalization history so a full sync cannot undo
+            // a manual unstack. Remote presence is checked separately after reset.
             await _db.assetFaceEntity.deleteAll();
             await _db.memoryAssetEntity.deleteAll();
             await _db.memoryEntity.deleteAll();

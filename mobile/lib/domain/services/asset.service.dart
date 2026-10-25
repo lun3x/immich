@@ -76,7 +76,11 @@ class AssetService {
     if (requests.isEmpty) {
       return current;
     }
-    final results = await _storageRepository.hashPhotoResources(requests, allowNetworkAccess: allowNetworkAccess);
+    final results = await _storageRepository.hashPhotoResources(
+      requests,
+      allowNetworkAccess: allowNetworkAccess,
+      cancelToken: cancelToken,
+    );
     if (cancelToken?.isCompleted == true) {
       throw StateError('Photo resource hashing cancelled');
     }

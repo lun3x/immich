@@ -507,9 +507,11 @@ open class NativeSyncApiImplBase(context: Context) : ImmichPlugin(), ActivityAwa
     callback(Result.success(assetIds.map { RawJpegPairResult(assetId = it) }))
   }
 
-  fun hashPhotoResources(requests: List<PhotoResourceRequest>, allowNetworkAccess: Boolean, callback: (Result<List<PhotoResourceHashResult>>) -> Unit) {
+  fun hashPhotoResources(requests: List<PhotoResourceRequest>, operationId: String, allowNetworkAccess: Boolean, callback: (Result<List<PhotoResourceHashResult>>) -> Unit) {
     callback(Result.failure(FlutterError("UNSUPPORTED_OS", "Original JPEG + RAW pairs are only available on iOS", null)))
   }
+
+  fun cancelPhotoResourceHashing(operationId: String) = Unit
 
   fun exportPhotoResource(request: PhotoResourceRequest, destinationPath: String, allowNetworkAccess: Boolean, callback: (Result<String>) -> Unit) {
     callback(Result.failure(FlutterError("UNSUPPORTED_OS", "Original JPEG + RAW pairs are only available on iOS", null)))

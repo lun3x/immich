@@ -6,10 +6,13 @@ import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/services/asset.service.dart';
+import 'package:immich_mobile/extensions/network_capability_extensions.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_album.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/settings.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/trashed_local_asset.repository.dart';
+import 'package:immich_mobile/platform/connectivity_api.g.dart';
 import 'package:immich_mobile/platform/native_sync_api.g.dart';
 import 'package:logging/logging.dart';
 
@@ -22,6 +25,7 @@ class HashService {
   final LocalAssetRepository _localAssetRepository;
   final TrashedLocalAssetRepository _trashedLocalAssetRepository;
   final NativeSyncApi _nativeSyncApi;
+  final ConnectivityApi _connectivityApi;
   final Completer<void>? _cancellation;
   final _log = Logger('HashService');
 
@@ -31,6 +35,7 @@ class HashService {
     required this._localAssetRepository,
     required this._trashedLocalAssetRepository,
     required this._nativeSyncApi,
+    required this._connectivityApi,
     this._cancellation,
     int? batchSize,
   }) : _batchSize = batchSize ?? kBatchHashFileLimit {
@@ -70,7 +75,10 @@ class HashService {
             try {
               await _assetService.prepareRawJpegPair(
                 asset,
-                allowNetworkAccess: album.backupSelection == BackupSelection.selected,
+                allowNetworkAccess:
+                    album.backupSelection == BackupSelection.selected &&
+                    (SettingsRepository.instance.appConfig.backup.useCellularForPhotos ||
+                        (await _connectivityApi.getCapabilities()).isUnmetered),
                 cancelToken: _cancellation,
               );
             } catch (e, s) {

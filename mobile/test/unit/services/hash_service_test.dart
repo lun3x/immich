@@ -2,10 +2,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
+import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/domain/services/hash.service.dart';
+import 'package:immich_mobile/infrastructure/repositories/settings.repository.dart';
+import 'package:immich_mobile/platform/connectivity_api.g.dart';
 import 'package:immich_mobile/platform/native_sync_api.g.dart';
 import 'package:mocktail/mocktail.dart';
 
+import '../../api.mocks.dart';
+import '../../medium/repository_context.dart';
 import '../../service.mocks.dart';
 import '../factories/local_album_factory.dart';
 import '../factories/local_asset_factory.dart';
@@ -15,9 +20,15 @@ void main() {
   late HashService sut;
   final assetService = MockAssetService();
   final mocks = RepositoryMocks();
+  final connectivity = MockConnectivityApi();
+  late MediumRepositoryContext ctx;
 
-  setUp(() {
+  setUp(() async {
+    ctx = MediumRepositoryContext();
+    await SettingsRepository.ensureInitialized(ctx.db);
+    when(() => connectivity.getCapabilities()).thenAnswer((_) async => [NetworkCapability.unmetered]);
     sut = HashService(
+      connectivityApi: connectivity,
       assetService: assetService,
       localAlbumRepository: mocks.localAlbum.repo,
       localAssetRepository: mocks.localAsset.repo,
@@ -26,10 +37,36 @@ void main() {
     );
   });
 
-  tearDown(() {
+  tearDown(() async {
+    await SettingsRepository.reset();
+    await ctx.dispose();
     mocks.resetAll();
     reset(assetService);
+    reset(connectivity);
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  test('selected iCloud pair stays pending on cellular when photo cellular backup is disabled', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await SettingsRepository.instance.write(SettingsKey.backupUseCellularForPhotos, false);
+    when(() => connectivity.getCapabilities()).thenAnswer((_) async => [NetworkCapability.cellular]);
+    final asset = LocalAssetFactory.create().copyWith(rawPairDiscovery: RawPairDiscovery.unknown);
+    final album = LocalAlbumFactory.create(backupSelection: BackupSelection.selected);
+    when(() => mocks.localAlbum.repo.getBackupAlbums()).thenAnswer((_) async => [album]);
+    when(() => mocks.localAlbum.repo.getAssetsToDiscoverRawPairs(album.id)).thenAnswer((_) async => [asset]);
+    when(
+      () => assetService.prepareRawJpegPair(
+        asset,
+        allowNetworkAccess: any(named: 'allowNetworkAccess'),
+        cancelToken: null,
+      ),
+    ).thenAnswer((_) async => asset);
+
+    await sut.hashAssets();
+
+    verify(() => assetService.prepareRawJpegPair(asset, allowNetworkAccess: false, cancelToken: null)).called(1);
+    verifyNever(() => assetService.prepareRawJpegPair(asset, allowNetworkAccess: true, cancelToken: null));
+    verifyNever(mocks.nativeApi.hashAssets);
   });
 
   test('already uploaded JPEG discovers its pair once across albums, excluded album does no pair work', () async {
@@ -128,6 +165,7 @@ void main() {
       test('batches by size limit', () async {
         const batchSize = 2;
         final sut = HashService(
+          connectivityApi: connectivity,
           assetService: assetService,
           localAlbumRepository: mocks.localAlbum.repo,
           localAssetRepository: mocks.localAsset.repo,

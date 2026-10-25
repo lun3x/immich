@@ -6,6 +6,7 @@ import 'package:immich_mobile/domain/models/stack.model.dart';
 import 'package:immich_mobile/domain/services/asset.service.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_asset.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/sync_stream.repository.dart';
 import 'package:mocktail/mocktail.dart';
 
 import '../../fixtures/raw_jpeg_pair.stub.dart';
@@ -123,6 +124,22 @@ void main() {
     await sut.finalizeRawJpegPair(asset, jpegId: 'jpeg-id', rawId: 'raw-id');
     verify(() => mocks.assetApi.api.stackWithoutMerging('jpeg-id', 'raw-id')).called(1);
     verifyNever(() => mocks.assetApi.api.stack(any()));
+  });
+  test('full sync preserves manual unstack for the same remote pair', () async {
+    await sut.finalizeRawJpegPair(asset, jpegId: 'jpeg-id', rawId: 'raw-id');
+    await remote.unStack(['stack']);
+    await SyncStreamRepository(ctx.db).reset();
+    expect((await local.getById(asset.id))!.rawPairReceipt!.completed, isTrue);
+
+    await ctx.newUser(id: 'owner');
+    await ctx.newAuthUser(id: 'owner');
+    await ctx.newRemoteAsset(id: 'jpeg-id', ownerId: 'owner', checksum: 'jpeg-hash');
+    await ctx.newRemoteAsset(id: 'raw-id', ownerId: 'owner', checksum: 'raw-hash');
+    await sut.finalizeRawJpegPair(asset, jpegId: 'jpeg-id', rawId: 'raw-id');
+
+    verify(() => mocks.assetApi.api.stackWithoutMerging('jpeg-id', 'raw-id')).called(1);
+    expect((await remote.get('jpeg-id'))!.stackId, isNull);
+    expect((await remote.get('raw-id'))!.stackId, isNull);
   });
   test('concurrent finalizers make one automatic stack request', () async {
     await Future.wait([
