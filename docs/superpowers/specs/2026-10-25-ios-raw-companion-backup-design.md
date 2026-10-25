@@ -1,6 +1,7 @@
 # iOS JPEG + RAW companion backup
 
-Status: proposed for user approval. Approach 1 selected by the user.
+Status: revised proposal for user approval. Approach 1 selected by the user;
+reuse the existing Live Photo upload flow for component sequencing.
 
 ## Intent and agreed behavior
 
@@ -11,6 +12,9 @@ This addresses [discussion #18201](https://github.com/immich-app/immich/discussi
 The user explicitly requires that uploading the JPEG must not exclude the RAW
 from subsequent backups. The user chose optional companion state on the existing
 local photo, rather than a general model of separate resource records.
+The user subsequently asked whether existing combined-photo flows can be reused.
+This revision proposes making the Live Photo upload sequence the starting point,
+with new state limited to RAW discovery, presence, and stack completion.
 
 This is a coordinated mobile change: native resource access, local database,
 hashing, both upload services, completion reporting, and cleanup eligibility.
@@ -46,7 +50,8 @@ project's `.venv`. Generated Pigeon and Drift files come from their generators.
 1. **Optional companion state on the existing photo (selected).** Add discovery,
    checksum, and completion information for a single RAW companion. This fits the
    existing one-row-per-Photos-item model and keeps timeline and album identities
-   intact. It deliberately specializes the backup model to processed + RAW pairs.
+   intact. Extend the existing Live Photo component upload sequence and callback
+   handling, with the existing stack API as the RAW pair's final association.
 2. **Separate resource records.** Store each underlying file beneath its parent
    Photos item. This generalizes to other compound formats but broadens the
    database, sync, and upload abstractions beyond this request. The user selected
@@ -67,6 +72,40 @@ project's `.venv`. Generated Pigeon and Drift files come from their generators.
   sufficient for automatic local cleanup.
 - The stack API accepts the primary first; the existing mobile asset service can
   update the local remote-asset and stack state.
+
+### Existing combined-photo flows to reuse
+
+Live Photos already retain one local Photos item while uploading two files. The
+foreground service uploads the motion video first, then the image with the
+returned `livePhotoVideoId`. The background service queues the video, records its
+role in task metadata, and queues the higher-priority image from the completion
+callback. The upload repository supplies the HTTP transport, persistent
+background queue, progress, and per-task retries. The server stores a dedicated
+image-to-motion relationship and hides the motion asset; metadata extraction can
+also associate matching Live Photo content identifiers.
+
+Use this same companion-first sequence for RAW + processed pairs. Extend the
+current services and task metadata; do not introduce another upload queue,
+transport, scheduler, or parallel pair-orchestration service. Extract small
+private helpers only where actual duplicated code requires them. RAW is a normal
+image asset, so final association uses the existing stack API rather than
+`livePhotoVideoId` or hidden-motion visibility.
+
+Live Photos do not currently provide independent persistent local checksums and
+completion state for both files. In the foreground path a failed motion upload
+can still be followed by a successful image upload. Candidate selection then
+considers the image checksum alone. Reusing that completion rule would violate
+the user's requirement for RAW retries, so the RAW-specific pending state and
+candidate changes in this design remain necessary. Fixing existing Live Photo
+partial-backup behavior is outside this change.
+
+Bursts do not supply a reusable compound-file uploader in this codebase. The
+native bridge does not carry burst identifiers or explicitly expand burst
+sequences; album fetches do not set `includeAllBurstAssets`. PhotoKit's
+[default fetch behavior](https://developer.apple.com/documentation/photos/phfetchoptions/includeallburstassets)
+returns the representative and user-picked members as separate assets. The server
+extracts burst grouping metadata into `autoStackId`, but that is not a mobile
+multi-component upload or retry flow. Preserve existing burst behavior.
 
 ## Native resource contract
 
@@ -139,7 +178,7 @@ callbacks, counts, and automatic local cleanup:
 | --- | --- | --- |
 | Companion unknown | Discover resources | No |
 | No companion | Existing single-asset behavior | Existing behavior |
-| Pair, missing primary | Upload primary; also schedule missing RAW | No |
+| Pair, missing primary | Upload/reuse RAW, then upload primary | No |
 | Pair, primary present, missing RAW/hash | Hash or upload RAW | No |
 | Pair, both files present, initial stack pending | Retry stacking only | No |
 | Pair, both present, initial stack completed | No work | Yes |
@@ -165,15 +204,22 @@ a deliberate remote deletion. This policy is a proposed default for user review.
 
 ## Upload orchestration and retries
 
-Put shared pair preparation, presence resolution, durable completion, and stack
-finalization in a focused helper/service used by both upload paths. Keep transport
-details in the existing foreground and background services.
+Extend the companion handling already present in `ForegroundUploadService` and
+`BackgroundUploadService`. Reuse `UploadRepository.uploadFile`,
+`buildUploadTask`, the current background queue, task completion callbacks, and
+the existing stack service. Add RAW resource export and independent pending
+state at the storage/repository boundary. Avoid a new orchestration service;
+small shared helpers may consolidate the presence and completion predicates.
 
 1. Discover/select the pair and resolve its component hashes and remote presence.
-2. Reuse a remote primary when present; otherwise upload it normally.
-3. Upload the missing RAW as a normal server asset, not a hidden Live Photo video.
-   Only the processed component carries the Photos cloud-ID metadata used to
-   merge the local item with its remote counterpart.
+2. Upload or reuse the RAW companion first, following the existing Live Photo
+   video-first sequence. Persist its confirmed live remote ID before advancing.
+   Upload RAW as a normal server image asset with its original filename.
+3. Upload the processed image normally, or reuse its existing live remote ID.
+   When the JPEG is already present, the RAW task still runs and its completion
+   proceeds directly to stack finalization. Only the processed component carries
+   the Photos cloud-ID metadata used to merge the local item with its remote
+   counterpart.
 4. Persist successful component uploads before proceeding. Server deduplication
    responses supply existing remote IDs; only non-trashed components count as
    successful presence.
@@ -186,10 +232,13 @@ errors, cancellation, RAW export failure, and stack failure do not erase a
 successful primary upload. A restart with two successful uploads but a failed
 stack retries the stack, even though both hashes are already on the server.
 
-Use component-specific background task IDs and task metadata; the two files must
-not collide under the single Photos identifier. Completion may arrive in either
-order and after app relaunch. Serialize finalization per item, reject stale
-callbacks for replaced resources or another account, and check actual synced
+For background backup, extend the existing role metadata and completion callback
+chain: RAW completion queues the processed image if needed, otherwise finalizes
+the pair. Use component-specific task IDs; the two files must not collide under
+the single Photos identifier. Recovered/duplicate callbacks must be safe after
+app relaunch or a switch between foreground and background backup. Serialize
+finalization per item, reject stale callbacks for replaced resources or another
+account, and check actual synced
 membership before retrying a stack whose response was lost.
 
 Existing edited-upload stacking must run in a defined sequence so it cannot
