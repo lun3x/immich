@@ -257,6 +257,17 @@ class LocalAlbumRepository extends DatabaseAccessor<Drift> with $LocalAlbumRepos
                   (local.rawPairState.equalsValue(RawPairDiscovery.present) &
                       (local.checksum.isNull() | local.rawChecksum.isNull()))),
         );
+    final excluded = _db.localAlbumAssetEntity.selectOnly()
+      ..addColumns([_db.localAlbumAssetEntity.assetId])
+      ..join([
+        innerJoin(
+          _db.localAlbumEntity,
+          _db.localAlbumAssetEntity.albumId.equalsExp(_db.localAlbumEntity.id),
+          useColumns: false,
+        ),
+      ])
+      ..where(_db.localAlbumEntity.backupSelection.equalsValue(BackupSelection.excluded));
+    query.where(local.id.isNotInQuery(excluded));
     return query.map((row) => row.readTable(local).toDto()).get();
   }
 

@@ -7,6 +7,7 @@ import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/data/db/main/table/asset/edit.drift.dart';
 import 'package:immich_mobile/data/db/main/table/asset/ocr.drift.dart';
 import 'package:immich_mobile/data/db/main/table/local/album.drift.dart';
+import 'package:immich_mobile/data/db/main/table/local/asset.drift.dart';
 import 'package:immich_mobile/data/db/main/table/memory/asset.drift.dart';
 import 'package:immich_mobile/data/db/main/table/memory/memory.drift.dart';
 import 'package:immich_mobile/data/db/main/table/people/asset_face.drift.dart';
@@ -57,6 +58,18 @@ class SyncStreamRepository extends DatabaseAccessor<Drift> with $SyncStreamRepos
             // so null linkedRemoteAlbumId manually to avoid dangling pointers in local_album_entity.
             await _db.localAlbumEntity.update().write(
               const LocalAlbumEntityCompanion(linkedRemoteAlbumId: Value(null)),
+            );
+            await _db.localAssetEntity.update().write(
+              const LocalAssetEntityCompanion(
+                rawReceiptServer: Value(null),
+                rawReceiptUserId: Value(null),
+                rawReceiptPairKey: Value(null),
+                rawReceiptRawId: Value(null),
+                rawReceiptJpegId: Value(null),
+                rawReceiptRawTaskId: Value(null),
+                rawReceiptJpegTaskId: Value(null),
+                rawPairCompleted: Value(false),
+              ),
             );
             await _db.assetFaceEntity.deleteAll();
             await _db.memoryAssetEntity.deleteAll();
@@ -215,10 +228,24 @@ class SyncStreamRepository extends DatabaseAccessor<Drift> with $SyncStreamRepos
     }
   }
 
+  void _invalidateRawPairRemoteId(Batch batch, String id) {
+    batch.update(
+      _db.localAssetEntity,
+      const LocalAssetEntityCompanion(rawReceiptRawId: Value(null), rawPairCompleted: Value(false)),
+      where: (e) => e.rawReceiptRawId.equals(id),
+    );
+    batch.update(
+      _db.localAssetEntity,
+      const LocalAssetEntityCompanion(rawReceiptJpegId: Value(null), rawPairCompleted: Value(false)),
+      where: (e) => e.rawReceiptJpegId.equals(id),
+    );
+  }
+
   Future<void> deleteAssetsV1(Iterable<SyncAssetDeleteV1> data, {String debugLabel = 'user'}) async {
     try {
       await _db.batch((batch) {
         for (final asset in data) {
+          _invalidateRawPairRemoteId(batch, asset.assetId);
           // cannot use FK here, so manually cascade
           batch.deleteWhere(_db.assetFaceEntity, (row) => row.assetId.equals(asset.assetId));
           batch.deleteWhere(_db.remoteAssetEntity, (row) => row.id.equals(asset.assetId));
@@ -234,6 +261,9 @@ class SyncStreamRepository extends DatabaseAccessor<Drift> with $SyncStreamRepos
     try {
       await _db.batch((batch) {
         for (final asset in data) {
+          if (asset.deletedAt != null) {
+            _invalidateRawPairRemoteId(batch, asset.id);
+          }
           final groupDate = asset.localDateTime ?? asset.fileCreatedAt?.toLocal();
           final companion = RemoteAssetEntityCompanion(
             name: Value(asset.originalFileName),
@@ -283,6 +313,9 @@ class SyncStreamRepository extends DatabaseAccessor<Drift> with $SyncStreamRepos
     try {
       await _db.batch((batch) {
         for (final asset in data) {
+          if (asset.deletedAt != null) {
+            _invalidateRawPairRemoteId(batch, asset.id);
+          }
           final groupDate = asset.localDateTime ?? asset.fileCreatedAt?.toLocal();
           final companion = RemoteAssetEntityCompanion(
             name: Value(asset.originalFileName),

@@ -7,6 +7,7 @@ import 'package:immich_mobile/data/db/main/table/local/asset.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/infrastructure/repositories/backup.repository.drift.dart';
+import 'package:immich_mobile/infrastructure/repositories/raw_pair_backup_predicate.dart';
 
 @DriftAccessor()
 class BackupRepository extends DatabaseAccessor<Drift> with $BackupRepositoryMixin {
@@ -35,75 +36,43 @@ class BackupRepository extends DatabaseAccessor<Drift> with $BackupRepositoryMix
   ///              (includes processing)
   /// - processing: number of those assets that are still preparing/have a null checksum
   Future<({int total, int remainder, int processing})> getAllCounts(String userId) async {
-    const sql = '''
-        SELECT
-        COUNT(*) AS total_count,
-        COUNT(*) FILTER (WHERE lae.checksum IS NULL) AS processing_count,
-        COUNT(*) FILTER (WHERE rae.id IS NULL) AS remainder_count
-        FROM local_asset_entity lae
-        LEFT JOIN main.remote_asset_entity rae
-            ON lae.checksum = rae.checksum AND rae.owner_id = ?1
-        WHERE EXISTS (
-            SELECT 1
-            FROM local_album_asset_entity laa
-            INNER JOIN main.local_album_entity la on laa.album_id = la.id
-            WHERE laa.asset_id = lae.id
-                AND la.backup_selection = ?2
-        )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM local_album_asset_entity laa
-            INNER JOIN main.local_album_entity la on laa.album_id = la.id
-            WHERE laa.asset_id = lae.id
-                AND la.backup_selection = ?3
-        );
-      ''';
-
-    final row = await _db
-        .customSelect(
-          sql,
-          variables: [
-            Variable.withString(userId),
-            Variable.withInt(BackupSelection.selected.index),
-            Variable.withInt(BackupSelection.excluded.index),
-          ],
-          readsFrom: {_db.localAlbumAssetEntity, _db.localAlbumEntity, _db.localAssetEntity, _db.remoteAssetEntity},
-        )
-        .getSingle();
-
-    final data = row.data;
-    return (
-      total: (data['total_count'] as int?) ?? 0,
-      remainder: (data['remainder_count'] as int?) ?? 0,
-      processing: (data['processing_count'] as int?) ?? 0,
-    );
+    final local = _db.localAssetEntity;
+    final complete =
+        primaryBackupExists(_db, userId) & rawPairBackupComplete(_db, userId, await backupServerEndpoint(_db));
+    final total = local.id.count();
+    final remainder = local.id.count(filter: complete.not());
+    final processing = local.id.count(filter: rawPairBackupProcessing(_db));
+    final row =
+        await (_db.selectOnly(local)
+              ..addColumns([total, remainder, processing])
+              ..where(_selectedAssets()))
+            .getSingle();
+    return (total: row.read(total) ?? 0, remainder: row.read(remainder) ?? 0, processing: row.read(processing) ?? 0);
   }
 
-  Future<List<LocalAsset>> getCandidates(String userId, {bool onlyHashed = true}) async {
-    final selectedAlbumIds = _db.localAlbumEntity.selectOnly(distinct: true)
-      ..addColumns([_db.localAlbumEntity.id])
-      ..where(_db.localAlbumEntity.backupSelection.equalsValue(BackupSelection.selected));
+  Expression<bool> _selectedAssets() =>
+      existsQuery(
+        _db.localAlbumAssetEntity.selectOnly()
+          ..addColumns([_db.localAlbumAssetEntity.assetId])
+          ..join([
+            innerJoin(
+              _db.localAlbumEntity,
+              _db.localAlbumAssetEntity.albumId.equalsExp(_db.localAlbumEntity.id),
+              useColumns: false,
+            ),
+          ])
+          ..where(
+            _db.localAlbumAssetEntity.assetId.equalsExp(_db.localAssetEntity.id) &
+                _db.localAlbumEntity.backupSelection.equalsValue(BackupSelection.selected),
+          ),
+      ) &
+      _db.localAssetEntity.id.isNotInQuery(_getExcludedSubquery());
 
+  Future<List<LocalAsset>> getCandidates(String userId, {bool onlyHashed = true}) async {
+    final complete =
+        primaryBackupExists(_db, userId) & rawPairBackupComplete(_db, userId, await backupServerEndpoint(_db));
     final query = _db.localAssetEntity.select()
-      ..where(
-        (lae) =>
-            existsQuery(
-              _db.localAlbumAssetEntity.selectOnly()
-                ..addColumns([_db.localAlbumAssetEntity.assetId])
-                ..where(
-                  _db.localAlbumAssetEntity.albumId.isInQuery(selectedAlbumIds) &
-                      _db.localAlbumAssetEntity.assetId.equalsExp(lae.id),
-                ),
-            ) &
-            notExistsQuery(
-              _db.remoteAssetEntity.selectOnly()
-                ..addColumns([_db.remoteAssetEntity.checksum])
-                ..where(
-                  _db.remoteAssetEntity.checksum.equalsExp(lae.checksum) & _db.remoteAssetEntity.ownerId.equals(userId),
-                ),
-            ) &
-            lae.id.isNotInQuery(_getExcludedSubquery()),
-      )
+      ..where((_) => _selectedAssets() & complete.not())
       ..orderBy([(localAsset) => OrderingTerm.desc(localAsset.createdAt)]);
 
     if (onlyHashed) {
