@@ -68,7 +68,7 @@ Use these names consistently across tasks; private implementations remain flexib
 
 **Interfaces:** Add optional `allowMerge: boolean` to `StackCreateDto`; omission keeps existing merge behavior. Add `StackRepository.createWithoutMerging(entity: Omit<Insertable<StackTable>, 'primaryAssetId'>, assetIds: [string, string]): Promise<{ status: 'created' | 'existing'; stack: Stack } | { status: 'conflict' }>`. Keep existing repository `create` unchanged. The service requires exactly two distinct IDs when `allowMerge === false`, maps conflict to HTTP 409, and emits `StackCreate` only for a newly created stack in this mode.
 
-- [ ] **Step 1: Add failing service/DTO and real-database tests.** Use existing `factory.auth`, medium context, and asset/stack factories. Seed the following states; assertions must inspect every affected asset's `stackId`, stack membership, primary, and emitted events:
+- [x] **Step 1: Add failing service/DTO and real-database tests.** Use existing `factory.auth`, medium context, and asset/stack factories. Seed the following states; assertions must inspect every affected asset's `stackId`, stack membership, primary, and emitted events:
 
 ```typescript
 it('rejects one component already stacked elsewhere without any mutation', async () => {
@@ -96,10 +96,10 @@ it('rejects one component already stacked elsewhere without any mutation', async
 // immediate_post_upload: response includes both assets even before EXIF rows exist.
 ```
 
-- [ ] **Step 2: Run the new tests and confirm assertion/contract failures.** `pnpm --dir server test --run src/services/stack.service.spec.ts src/controllers/stack.controller.spec.ts`; `pnpm --dir server test:medium --run test/medium/specs/services/stack.service.spec.ts`. Docker is required for the medium suite.
-- [ ] **Step 3: Implement the interface.** In one transaction, lock both asset rows in stable ID order before reading membership; verify current owner/live status. Create exactly two members only when both are unstacked, return an existing common stack unchanged, or return conflict with no writes. Coordinate any needed stack-row access with concurrent deletion/primary changes; prove this with the medium tests. Do not invoke the existing merge branch for strict requests. Make immediate post-upload responses usable before metadata extraction has created EXIF rows; narrowly adapt the stack response projection if required rather than inventing another endpoint.
-- [ ] **Step 4: Rerun those tests, `pnpm --dir server check`, and regenerate with `mise run //:open-api`.** Expect passing tests/types and only the intended schema/client changes; do not hand-edit generated contracts.
-- [ ] **Step 5: Commit:** `jj commit -m 'feat(server): add guarded non-merging stack creation'`.
+- [x] **Step 2: Run the new tests and confirm assertion/contract failures.** `pnpm --dir server test --run src/services/stack.service.spec.ts src/controllers/stack.controller.spec.ts`; `pnpm --dir server test:medium --run test/medium/specs/services/stack.service.spec.ts`. Docker is required for the medium suite.
+- [x] **Step 3: Implement the interface.** In one transaction, lock both asset rows in stable ID order before reading membership; verify current owner/live status. Create exactly two members only when both are unstacked, return an existing common stack unchanged, or return conflict with no writes. Coordinate any needed stack-row access with concurrent deletion/primary changes; prove this with the medium tests. Do not invoke the existing merge branch for strict requests. Make immediate post-upload responses usable before metadata extraction has created EXIF rows; narrowly adapt the stack response projection if required rather than inventing another endpoint.
+- [x] **Step 4: Rerun those tests, `pnpm --dir server check`, and regenerate with `mise run //:open-api`.** Expect passing tests/types and only the intended schema/client changes; do not hand-edit generated contracts.
+- [x] **Step 5: Commit:** `jj commit -m 'feat(server): add guarded non-merging stack creation'`.
 
 ## Task 2: Detect original pairs and hash/export exact native resources
 
@@ -275,4 +275,4 @@ Test Wi-Fi requirements, task failures/cancellation, component-specific filename
 
 The native negative cases enforce the same-item restriction; the server task enforces non-merging under concurrency. State/discovery covers migration and legacy JPEG matches, upload tasks cover both transports and one completion callback, and query/sync/cleanup tasks cover remote removal and delayed synchronization. Role/descriptor names and receipt scope above are shared across task interfaces. Task 8 records actual build/device evidence; it is not permission to claim unavailable checks passed.
 
-Execution choice is intentionally pending user review. Recommended: native execution in this chat, with one independent review at the end, because these tasks share tightly coupled bridge/model/state interfaces and benefit from preserving context through the implementation.
+Execution: native approach selected by the user on 2026-10-25. Implement in this chat with one independent review at the end.

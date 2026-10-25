@@ -19,6 +19,7 @@ export class StackSearchDto extends createZodDto({
 
 export class StackCreateDto extends createZodDto({
   assetIds: z.array(z.uuidv4()).min(2).describe('Asset IDs (first becomes primary, min 2)'),
+  allowMerge: z.boolean().optional().describe('Allow merging existing stacks (default true)'),
 }) {}
 
 export class StackUpdateDto extends createZodDto({
