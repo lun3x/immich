@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/asset/asset_metadata.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart' hide AssetVisibility;
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/services/asset.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
@@ -256,6 +257,17 @@ class ForegroundUploadService {
     File? livePhotoFile;
 
     try {
+      if (CurrentPlatform.isIOS && asset.type == AssetType.image) {
+        final prepared = await _assetService.prepareRawJpegPair(
+          asset,
+          allowNetworkAccess: true,
+          cancelToken: cancelToken,
+        );
+        if (prepared.rawPairDiscovery == RawPairDiscovery.present) {
+          await _uploadRawJpegPair(prepared, cancelToken, callbacks);
+          return;
+        }
+      }
       final remoteId = (await _assetService.getLocalAsset(asset.id))?.remoteId;
       if (remoteId != null) {
         await _handleUploadSuccess(asset, remoteId, callbacks);
@@ -419,6 +431,103 @@ class ForegroundUploadService {
         }
       }
     }
+  }
+
+  Future<void> _uploadRawJpegPair(LocalAsset asset, Completer<void>? cancelToken, UploadCallbacks callbacks) async {
+    final pair = asset.rawJpegPair!;
+    final endpoint = Store.get(StoreKey.serverEndpoint);
+    final owner = Store.get(StoreKey.currentUser).id;
+    void checkCurrent() {
+      if (Store.tryGet(StoreKey.serverEndpoint) != endpoint || Store.tryGet(StoreKey.currentUser)?.id != owner) {
+        throw StateError('Backup account changed during upload');
+      }
+    }
+
+    final ids = await _assetService.resolveRawPairRemoteIds(asset);
+    ids.requireNoTrash();
+    String? jpegId = ids.jpegId;
+    String? rawId = ids.rawId;
+    for (final role in [PhotoResourceRole.raw, PhotoResourceRole.processed]) {
+      if (shouldAbortUpload || cancelToken?.isCompleted == true) {
+        return;
+      }
+      checkCurrent();
+      if (role == PhotoResourceRole.raw ? rawId != null : jpegId != null) {
+        continue;
+      }
+      final resource = role == PhotoResourceRole.raw ? pair.rawOriginal : pair.processed;
+      File? export;
+      try {
+        export = await _storageRepository.exportPhotoResource(
+          pair.request(role),
+          allowNetworkAccess: true,
+          cancelToken: cancelToken,
+        );
+        if (shouldAbortUpload || cancelToken?.isCompleted == true) {
+          return;
+        }
+        checkCurrent();
+        final fields = {
+          'fileCreatedAt': asset.createdAt.toUtc().toIso8601String(),
+          'fileModifiedAt': asset.updatedAt.toUtc().toIso8601String(),
+          'isFavorite': asset.isFavorite.toString(),
+          'duration': '0',
+          if (role == PhotoResourceRole.processed && asset.cloudId != null)
+            'metadata': jsonEncode([
+              RemoteAssetMetadataItem(
+                key: RemoteAssetMetadataKey.mobileApp,
+                value: RemoteAssetMobileAppMetadata(
+                  cloudId: asset.cloudId,
+                  createdAt: asset.createdAt.toIso8601String(),
+                  adjustmentTime: asset.adjustmentTime?.toIso8601String(),
+                  latitude: asset.latitude?.toString(),
+                  longitude: asset.longitude?.toString(),
+                ),
+              ),
+            ]),
+        };
+        final onProgress = callbacks.onProgress;
+        final result = await _uploadRepository.uploadFile(
+          file: export,
+          originalFileName: resource.filename,
+          fields: fields,
+          cancelToken: cancelToken,
+          logContext: 'photoResource[${asset.id}/${role.name}]',
+          onProgress: onProgress == null
+              ? null
+              : (bytes, total) => onProgress(asset.id, resource.filename, bytes, total),
+        );
+        if (result.isCancelled || cancelToken?.isCompleted == true) {
+          shouldAbortUpload = true;
+          return;
+        }
+        if (!result.isSuccess || result.remoteAssetId == null) {
+          if (result.errorMessage == 'Quota has been exceeded!') {
+            shouldAbortUpload = true;
+          }
+          throw StateError(result.errorMessage ?? 'Photo resource upload failed');
+        }
+        checkCurrent();
+        await _assetService.recordRawPairUpload(asset, role: role, remoteId: result.remoteAssetId!);
+        if (role == PhotoResourceRole.raw) {
+          rawId = result.remoteAssetId;
+        } else {
+          jpegId = result.remoteAssetId;
+        }
+      } finally {
+        if (export != null) {
+          try {
+            await export.delete();
+          } catch (error) {
+            _logger.warning('Cannot remove completed resource export', error);
+          }
+        }
+      }
+    }
+    checkCurrent();
+    await _assetService.finalizeRawJpegPair(asset, jpegId: jpegId!, rawId: rawId!);
+    checkCurrent();
+    callbacks.onSuccess?.call(asset.id, jpegId);
   }
 
   Future<void> _handleUploadSuccess(LocalAsset asset, String remoteId, UploadCallbacks callbacks) async {

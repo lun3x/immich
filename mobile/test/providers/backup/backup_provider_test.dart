@@ -52,6 +52,16 @@ void main() {
   }
 
   group('foreground backup counts', () {
+    test('one finalized RAW pair counts as one backed-up Photos item', () async {
+      mockCounts(total: 1, remainder: 1);
+      final onSuccess = await startAndCaptureOnSuccess();
+      expect(notifier.state.remainderCount, 1);
+      onSuccess('photos-pair', 'jpeg-id');
+      expect(notifier.state.totalCount, 1);
+      expect(notifier.state.backupCount, 1);
+      expect(notifier.state.remainderCount, 0);
+    });
+
     test('successes move one asset from remainder to backup', () async {
       mockCounts(total: 25, remainder: 25);
       final onSuccess = await startAndCaptureOnSuccess();
