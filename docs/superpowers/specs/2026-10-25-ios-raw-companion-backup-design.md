@@ -15,6 +15,8 @@ local photo, rather than a general model of separate resource records.
 The user subsequently asked whether existing combined-photo flows can be reused.
 This revision proposes making the Live Photo upload sequence the starting point,
 with new state limited to RAW discovery, presence, and stack completion.
+The user also requires that automatic stacking occur only for a combined
+RAW + JPEG item in iOS Photos, without grouping unrelated photos.
 
 This is a coordinated mobile change: native resource access, local database,
 hashing, both upload services, completion reporting, and cleanup eligibility.
@@ -28,19 +30,24 @@ hashing, both upload services, completion reporting, and cleanup eligibility.
 - Cover foreground, manual, and iOS background backup, including iCloud resources.
 - Keep the processed image primary in the initial automatic stack.
 - Keep backup counts and automatic local cleanup consistent with pair completion.
+- Create an automatic stack only from a verified original RAW + JPEG resource
+  pair within the same iOS Photos asset; never infer a relationship across items.
 
 ## Scope and constraints
 
 Retain one local asset, its Photos identifier, and its album memberships. Add
 optional RAW fields to that row. Use the current server's upload, checksum
-deduplication, and stack APIs; no server changes or older-server compatibility
-layer are planned. Preserve the existing behavior of ordinary photos, standalone
-RAW images, videos, Android, and Live Photos.
+deduplication, and stack APIs. Add a narrow opt-in guard to the existing stack
+API so RAW pairing cannot merge or rearrange an existing stack. Regenerate its
+API/SDK models; no older-server compatibility layer is planned. Preserve the
+existing behavior of ordinary photos, standalone RAW images, videos, Android,
+and Live Photos.
 
-The implementer proposes supporting processed HEIF + RAW as well as JPEG + RAW
-when PhotoKit exposes the same two-resource structure. Do not infer a pair from
-matching filenames or from unrelated assets. Do not build a generic resource
-framework, new settings screen, or new stack UI.
+Limit this change to verified JPEG + RAW original pairs. Leave HEIF + RAW and
+other compound formats on their existing paths. Do not infer a pair from
+filenames, capture times, camera metadata, burst IDs, visual similarity, or
+unrelated local or remote assets. Do not build a generic resource framework, new
+settings screen, or new stack UI.
 
 All version-control operations use Jujutsu. Any Python tooling must use the
 project's `.venv`. Generated Pigeon and Drift files come from their generators.
@@ -114,6 +121,34 @@ contents. Classify RAW using the resource's uniform type and RAW-image
 conformance, including camera RAW such as RAF and DNG. Resource position and
 `.alternatePhoto` alone are insufficient identifiers of the RAW component.
 Adjustment data, proxies, and paired video are not RAW companions.
+
+### Strict automatic-stacking eligibility
+
+The source of truth is one currently accessible `PHAsset.localIdentifier` with
+both a RAW original and a JPEG original in its original photo resources:
+
+1. Enumerate the resources of that exact Photos asset. Require an unambiguous
+   original pair across `.photo` and `.alternatePhoto`, classified by actual
+   uniform type: one RAW and one JPEG. Either format may occupy either role.
+2. Do not treat a JPEG thumbnail, a preview embedded in RAW, or a JPEG generated
+   by editing/exporting a standalone RAW as the second original. In particular,
+   `.fullSizePhoto`, adjustment-base resources, and other edited derivatives
+   cannot establish the existence of a combined original pair.
+3. Carry the parent Photos identifier and selected original resource descriptors
+   through hashing and upload. Obtain each remote component ID only from its
+   exact-byte checksum match or the corresponding upload response. Filename or
+   EXIF matches never supply association evidence.
+4. Revalidate the same original pair before initial stack finalization. Stale
+   callbacks, a changed/deleted Photos item, or uncertain resource classification
+   must not trigger a stack operation.
+5. Only verified pairs enter the new automatic-stacking path. JPEG and RAW stored
+   as two separate Photos items follow their existing independent upload paths,
+   even if their filenames, timestamps, or contents suggest a relationship.
+
+Ambiguity leaves pairing unresolved and surfaces an error through the existing
+backup flow; it never falls back to guessing. For a confirmed original pair,
+existing edited-rendition selection may determine the processed upload, but an
+edited rendition cannot turn a standalone RAW into an eligible pair.
 
 For a genuine pair, select exactly one processed image and its original RAW.
 Use the current edited processed rendition when one exists, preserving the
@@ -223,8 +258,9 @@ small shared helpers may consolidate the presence and completion predicates.
 4. Persist successful component uploads before proceeding. Server deduplication
    responses supply existing remote IDs; only non-trashed components count as
    successful presence.
-5. Once both exist, create/update the stack with the processed ID first, update
-   local remote/stack data, and persist the completion receipt.
+5. Once both exist and the original-pair evidence is revalidated, create the
+   stack with the processed ID first, subject to the stack-membership guard
+   below. Update local remote/stack data and persist the completion receipt.
 6. Report success for the local Photos item only after finalization succeeds.
 
 Failures leave enough state to retry only missing work. Network loss, quota
@@ -242,9 +278,37 @@ account, and check actual synced
 membership before retrying a stack whose response was lost.
 
 Existing edited-upload stacking must run in a defined sequence so it cannot
-overwrite the RAW pair. Preserve other members of an existing stack when adding
-the RAW. Once automatic pairing has completed, do not continually recreate the
-stack or reverse subsequent deliberate user unstacking/primary changes. A new
+overwrite the RAW pair or indirectly merge unrelated stacks. Apply these
+membership guards to all automatic pair finalization:
+
+- If both remote components are unstacked, create a stack containing exactly
+  those two IDs, with the JPEG component first.
+- If both are already in the same stack, accept that existing grouping without
+  rewriting its membership or chosen primary. Existing user grouping takes
+  precedence over the default for a newly created pair stack.
+- If either component is in a different or non-matching stack, upload missing
+  bytes but leave automatic pairing unresolved with a clear conflict error.
+  Never merge stacks, pull an asset out of another stack, add unrelated members,
+  or change an unrelated stack's primary to make this operation succeed.
+
+The implementer proposes the conservative conflict behavior above to satisfy
+the user's restriction; it is an explicit default for design review. Client-only
+membership checks are insufficient because the existing stack API can merge
+stacks and membership can change between a check and the request. Add an opt-in
+non-merging mode to that same API, used for verified RAW + JPEG pair requests.
+Within the server transaction, serialize access to the requested assets, check
+their current memberships, and either create the exact two-item stack, return
+their existing common stack unchanged, or reject a membership conflict without
+mutating any stack. Existing ordinary stack calls retain their intended merge
+behavior. A private helper and an API option name are implementer decisions;
+enforcing the membership guard atomically on the server is a requirement.
+
+This small server/API change replaces the earlier proposal of no server changes:
+it is necessary to enforce the user's grouping restriction under concurrent
+stack changes while continuing to use the existing stack endpoint.
+
+Once automatic pairing has completed, do not continually recreate the stack or
+reverse subsequent deliberate user unstacking/primary changes. A new
 processed revision or newly uploaded replacement component may require a new
 initial finalization; a manual stack change by itself does not.
 
@@ -268,6 +332,15 @@ upload tests and native selector coverage where the project tooling supports it:
 - JPEG already remote + RAW missing remains a candidate and uploads only RAW.
 - Both files are missing; both reach the server, with JPEG as stack primary.
 - RAW-first PhotoKit ordering and processed-as-alternate ordering select correctly.
+- Separate Photos items with matching filenames/times, burst siblings, similar
+  images, and standalone RAW with an edited JPEG derivative never trigger the
+  new stack path. HEIF + RAW remains unchanged.
+- Uncertain/multiple candidate originals and stale pair evidence never trigger
+  an automatic stack call.
+- A deduplicated component already in another stack causes no merge, detachment,
+  primary change, or extra stack members; an existing shared stack is preserved.
+- Server tests cover the opt-in non-merging mode and concurrent membership
+  changes; ordinary stack requests retain the existing merge behavior.
 - A RAW failure/restart retains the JPEG and retries RAW; stack failure retries
   stacking without uploading either file again.
 - Background callbacks in either order, duplicate callbacks, cancelled tasks,
