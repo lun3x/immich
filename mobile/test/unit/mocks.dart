@@ -81,6 +81,7 @@ class RepositoryMocks {
 
   void _stubLocalAlbumRepository() {
     when(localAlbum.getBackupAlbums).thenAnswer((_) async => []);
+    when(() => localAlbum.repo.getAssetsToDiscoverRawPairs(any())).thenAnswer((_) async => []);
     when(localAlbum.getAssetsToHash).thenAnswer((_) async => []);
   }
 
