@@ -1,7 +1,8 @@
 # iOS JPEG + RAW companion backup
 
-Status: revised proposal for user approval. Approach 1 selected by the user;
-reuse the existing Live Photo upload flow for component sequencing.
+Status: approved by the user on 2026-10-25. Approach 1 selected by the user;
+reuse the existing Live Photo upload flow for component sequencing, with strict
+same-Photos-item eligibility and protection for existing stacks.
 
 ## Intent and agreed behavior
 
