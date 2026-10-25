@@ -43,6 +43,47 @@ class AssetApiRepository extends ApiRepository {
     return response?.count ?? 0;
   }
 
+  Future<Map<String, ({String? assetId, bool isTrashed})>> checkUploadChecksums(Map<String, String> checksums) async {
+    if (checksums.isEmpty) {
+      return {};
+    }
+    final response = await checkNull(
+      _api.checkBulkUpload(
+        AssetBulkUploadCheckDto(
+          assets: [
+            for (final entry in checksums.entries) AssetBulkUploadCheckItem(id: entry.key, checksum: entry.value),
+          ],
+        ),
+      ),
+    );
+    final result = <String, ({String? assetId, bool isTrashed})>{};
+    for (final item in response.results) {
+      if (!checksums.containsKey(item.id) || result.containsKey(item.id)) {
+        throw StateError('Invalid checksum check response');
+      }
+      if (item.action == AssetUploadAction.accept) {
+        result[item.id] = (assetId: null, isTrashed: false);
+      } else {
+        final id = item.assetId.orElse(null);
+        final trashed = item.isTrashed.orElse(null);
+        if (id == null || trashed == null || item.reason.orElse(null) == AssetRejectReason.unsupportedFormat) {
+          throw StateError('Cannot establish server resource presence');
+        }
+        result[item.id] = (assetId: id, isTrashed: trashed);
+      }
+    }
+    if (result.length != checksums.length) {
+      throw StateError('Incomplete checksum check response');
+    }
+    return result;
+  }
+
+  Future<StackResponse> stackWithoutMerging(String jpegId, String rawId) async {
+    return (await checkNull(
+      _stacksApi.createStack(StackCreateDto(assetIds: [jpegId, rawId], allowMerge: const Optional.present(false))),
+    )).toStack();
+  }
+
   Future<StackResponse> stack(List<String> ids) async {
     final responseDto = await checkNull(_stacksApi.createStack(StackCreateDto(assetIds: ids)));
 

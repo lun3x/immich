@@ -30,6 +30,21 @@ class RawPairReceipt {
   int get hashCode => _identity.hashCode;
 }
 
+class RawPairRemoteIds {
+  final String? jpegId;
+  final String? rawId;
+  final bool jpegTrashed;
+  final bool rawTrashed;
+  const RawPairRemoteIds({this.jpegId, this.rawId, this.jpegTrashed = false, this.rawTrashed = false});
+  void requireNoTrash() {
+    if (jpegTrashed || rawTrashed) {
+      throw StateError(
+        'A JPEG or RAW resource is in the server trash. Restore it or permanently delete it before retrying backup.',
+      );
+    }
+  }
+}
+
 enum PhotoResourceRole { processed, raw }
 
 class PhotoResource {
