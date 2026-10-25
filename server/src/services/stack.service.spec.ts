@@ -38,6 +38,17 @@ describe(StackService.name, () => {
   });
 
   describe('create', () => {
+    it('should reject duplicate IDs for non-merging creation', async () => {
+      const auth = AuthFactory.create();
+      const id = newUuid();
+      mocks.access.asset.checkOwnerAccess.mockResolvedValue(new Set([id]));
+
+      await expect(sut.create(auth, { assetIds: [id, id], allowMerge: false })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(mocks.stack.create).not.toHaveBeenCalled();
+    });
+
     it('should require asset.update permissions', async () => {
       const auth = AuthFactory.create();
       const [primaryAsset, asset] = [AssetFactory.create(), AssetFactory.create()];

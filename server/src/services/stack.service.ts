@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { BulkIdsDto } from 'src/dtos/asset-ids.response.dto.js';
 import { AuthDto } from 'src/dtos/auth.dto.js';
 import { StackCreateDto, StackResponseDto, StackSearchDto, StackUpdateDto, mapStack } from 'src/dtos/stack.dto.js';
@@ -20,6 +20,26 @@ export class StackService extends BaseService {
 
   async create(auth: AuthDto, dto: StackCreateDto): Promise<StackResponseDto> {
     await this.requireAccess({ auth, permission: Permission.AssetUpdate, ids: dto.assetIds });
+
+    if (dto.allowMerge === false) {
+      if (dto.assetIds.length !== 2 || new Set(dto.assetIds).size !== 2) {
+        throw new BadRequestException('Non-merging stacks require two distinct assets');
+      }
+
+      const result = await this.stackRepository.createWithoutMerging({ ownerId: auth.user.id }, [
+        dto.assetIds[0],
+        dto.assetIds[1],
+      ]);
+      if (result.status === 'conflict') {
+        throw new ConflictException('Assets are unavailable or already belong to another stack');
+      }
+
+      if (result.status === 'created') {
+        await this.eventRepository.emit('StackCreate', { stackId: result.stack.id, userId: auth.user.id });
+      }
+
+      return mapStack(result.stack, { auth });
+    }
 
     const stack = await this.stackRepository.create({ ownerId: auth.user.id }, dto.assetIds);
 
