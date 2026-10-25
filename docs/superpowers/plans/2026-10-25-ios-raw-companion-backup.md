@@ -212,7 +212,7 @@ Cover: both bytes uploaded/stack pending; other owner; unknown discovery; exclud
 
 **Interfaces:** Preserve `uploadSingleAsset`, `uploadManual`, and `UploadCallbacks`. Add private `_uploadRawJpegPair(LocalAsset asset, Completer<void>? cancelToken, UploadCallbacks callbacks) -> Future<void>` using Tasks 2–4; no new transport. Task 3's preparation determines whether this path applies before the old remote-primary early return.
 
-- [ ] **Step 1: Write failing upload tests.** Use the existing capture helpers and mock storage/asset service:
+- [x] **Step 1: Write failing upload tests.** Use the existing capture helpers and mock storage/asset service:
 
 ```dart
 // raw_missing_jpeg_remote: captured filenames == ['DSCF0001.RAF']; stack receives [jpegId, rawId].
@@ -226,10 +226,10 @@ Cover: both bytes uploaded/stack pending; other owner; unknown discovery; exclud
 
 Assert exact selected filenames/bytes, only processed upload has cloud metadata, RAW has ordinary visibility, cancellation/quota behavior, temp-file ownership, same hash dedup checks, manual unhashed pair preparation, and no changes to existing Live Photo tests. A manual album action receives one successful JPEG ID for the local item; the RAW stays accessible through its stack.
 
-- [ ] **Step 2: Run to confirm failure.** From `mobile`: `flutter test test/services/foreground_upload.service_test.dart test/providers/backup/backup_provider_test.dart test/unit/services/remote_album_service_test.dart`.
-- [ ] **Step 3: Implement the RAW branch around the existing uploader.** Respect the current connectivity/cellular guard; prepare pair evidence/hashes, resolve remote IDs, export/upload the missing RAW, persist it, then upload/reuse processed image and finalize. A RAW error or cancellation stops advancement for this item. On success emit exactly one existing item callback after finalization. Use `finally` to clean only foreground-owned completed/partial exports. Do not call ordinary `_handleUploadSuccess`'s edited-stack path for pairs. Non-pairs, share-intent files without Photos pair proof, and Live Photos retain their existing paths.
-- [ ] **Step 4: Rerun those tests.** Confirm the already-remote JPEG case transfers only RAW and retry-after-stack-failure transfers neither file.
-- [ ] **Step 5: Commit:** `jj commit -m 'feat(mobile): upload RAW companions through foreground backup'`.
+- [x] **Step 2: Run to confirm failure.** From `mobile`: `flutter test test/services/foreground_upload.service_test.dart test/providers/backup/backup_provider_test.dart test/unit/services/remote_album_service_test.dart`.
+- [x] **Step 3: Implement the RAW branch around the existing uploader.** Respect the current connectivity/cellular guard; prepare pair evidence/hashes, resolve remote IDs, export/upload the missing RAW, persist it, then upload/reuse processed image and finalize. A RAW error or cancellation stops advancement for this item. On success emit exactly one existing item callback after finalization. Use `finally` to clean only foreground-owned completed/partial exports. Do not call ordinary `_handleUploadSuccess`'s edited-stack path for pairs. Non-pairs, share-intent files without Photos pair proof, and Live Photos retain their existing paths.
+- [x] **Step 4: Rerun those tests.** Confirm the already-remote JPEG case transfers only RAW and retry-after-stack-failure transfers neither file.
+- [x] **Step 5: Commit:** `jj commit -m 'feat(mobile): upload RAW companions through foreground backup'`.
 
 ## Task 7: Extend persistent background task chaining and recovery
 
