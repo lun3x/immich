@@ -1,6 +1,33 @@
 import Photos
 
 extension PHAsset {
+  func rawJpegResources() throws -> (selection: RawPhotoResourceSelection, resources: [String: PHAssetResource])? {
+    guard mediaType == .image else { return nil }
+    let resources = PHAssetResource.assetResources(for: self)
+    let descriptors = resources.map { resource in
+      RawPhotoResourceDescriptor(
+        assetId: resource.assetLocalIdentifier,
+        key: photoResourceKey([localIdentifier, String(resource.type.rawValue), resource.originalFilename, resource.uniformTypeIdentifier]),
+        type: resource.type.rawValue,
+        filename: resource.originalFilename,
+        uniformTypeIdentifier: resource.uniformTypeIdentifier,
+        isCurrent: resource.isCurrent
+      )
+    }
+    // Favorites/location updates also change modificationDate. Only an actual
+    // image adjustment or changed original resources invalidates pair identity.
+    let adjustmentDate = value(forKey: "adjustmentTimestamp") as? Date
+    let revision = adjustmentDate.map { String($0.timeIntervalSince1970) } ?? "original"
+    guard let selection = try selectRawJpegPair(assetId: localIdentifier, revision: revision, resources: descriptors) else {
+      return nil
+    }
+    var byKey: [String: PHAssetResource] = [:]
+    for (resource, descriptor) in zip(resources, descriptors) {
+      byKey[descriptor.key] = resource
+    }
+    return (selection, byKey)
+  }
+
   var platformPlaybackStyle: PlatformAssetPlaybackStyle {
     switch playbackStyle {
     case .image: return .image
