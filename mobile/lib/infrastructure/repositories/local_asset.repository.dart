@@ -107,6 +107,18 @@ class LocalAssetRepository extends DatabaseAccessor<Drift> with $LocalAssetRepos
         return true;
       });
 
+  Future<RawPairReceipt> getRawPairScope(String pairKey) async {
+    final stored =
+        await (_db.storeEntity.select()..where((e) => e.id.isIn([StoreKey.currentUser.id, StoreKey.serverEndpoint.id])))
+            .get();
+    final owner = stored.where((e) => e.id == StoreKey.currentUser.id).firstOrNull?.stringValue;
+    final endpoint = stored.where((e) => e.id == StoreKey.serverEndpoint.id).firstOrNull?.stringValue;
+    if (owner == null || endpoint == null) {
+      throw StateError('No active backup account');
+    }
+    return RawPairReceipt(serverEndpoint: endpoint, ownerId: owner, pairKey: pairKey);
+  }
+
   Future<bool> isRawPairScopeCurrent(RawPairReceipt scope) async {
     final stored =
         await (_db.storeEntity.select()..where((e) => e.id.isIn([StoreKey.currentUser.id, StoreKey.serverEndpoint.id])))

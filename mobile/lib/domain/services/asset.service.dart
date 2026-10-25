@@ -105,6 +105,157 @@ class AssetService {
     return (await _localRepository.getById(asset.id))!;
   }
 
+  static final _rawPairFinalizations = <String, Future<void>>{};
+
+  Future<LocalAsset> _assertRawPairCurrent(LocalAsset asset, RawPairReceipt scope) async {
+    final current = await _localRepository.getById(asset.id);
+    if (!CurrentPlatform.isIOS ||
+        !await _localRepository.isRawPairScopeCurrent(scope) ||
+        current?.rawPairDiscovery != RawPairDiscovery.present ||
+        current?.rawJpegPair?.pairKey != scope.pairKey ||
+        current?.checksum == null ||
+        current?.rawChecksum == null ||
+        current?.checksum != asset.checksum ||
+        current?.rawChecksum != asset.rawChecksum) {
+      throw StateError('Photo resources or backup account changed');
+    }
+    return current!;
+  }
+
+  Future<RawPairRemoteIds> resolveRawPairRemoteIds(LocalAsset asset) async {
+    final scope = await _localRepository.getRawPairScope(asset.rawJpegPair?.pairKey ?? '');
+    await _assertRawPairCurrent(asset, scope);
+    final result = await _apiRepository.checkUploadChecksums({'jpeg': asset.checksum!, 'raw': asset.rawChecksum!});
+    await _assertRawPairCurrent(asset, scope);
+    final jpeg = result['jpeg'];
+    final raw = result['raw'];
+    if (jpeg == null || raw == null) {
+      throw StateError('Incomplete resource presence check');
+    }
+    return RawPairRemoteIds(
+      jpegId: jpeg.isTrashed ? null : jpeg.assetId,
+      rawId: raw.isTrashed ? null : raw.assetId,
+      jpegTrashed: jpeg.isTrashed,
+      rawTrashed: raw.isTrashed,
+    );
+  }
+
+  RawPairReceipt _rawPairReceipt(
+    RawPairReceipt scope,
+    LocalAsset current,
+    RawPairRemoteIds ids, {
+    bool completed = false,
+  }) {
+    final old = current.rawPairReceipt;
+    final sameScope =
+        old?.serverEndpoint == scope.serverEndpoint && old?.ownerId == scope.ownerId && old?.pairKey == scope.pairKey;
+    return RawPairReceipt(
+      serverEndpoint: scope.serverEndpoint,
+      ownerId: scope.ownerId,
+      pairKey: scope.pairKey,
+      rawId: ids.rawId,
+      jpegId: ids.jpegId,
+      rawTaskId: sameScope ? old?.rawTaskId : null,
+      jpegTaskId: sameScope ? old?.jpegTaskId : null,
+      completed: completed,
+    );
+  }
+
+  Future<void> recordRawPairUpload(
+    LocalAsset asset, {
+    required PhotoResourceRole role,
+    required String remoteId,
+  }) async {
+    final scope = await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
+    final ids = await resolveRawPairRemoteIds(asset);
+    ids.requireNoTrash();
+    if ((role == PhotoResourceRole.raw ? ids.rawId : ids.jpegId) != remoteId) {
+      throw StateError('Uploaded resource could not be confirmed on the server');
+    }
+    final current = await _assertRawPairCurrent(asset, scope);
+    final old = current.rawPairReceipt;
+    final completed =
+        old?.completed == true &&
+        old?.serverEndpoint == scope.serverEndpoint &&
+        old?.ownerId == scope.ownerId &&
+        old?.pairKey == scope.pairKey &&
+        old?.jpegId == ids.jpegId &&
+        old?.rawId == ids.rawId;
+    if (!await _localRepository.saveRawPairReceipt(
+      asset.id,
+      _rawPairReceipt(scope, current, ids, completed: completed),
+    )) {
+      throw StateError('Photo resources changed after upload');
+    }
+    await _remoteRepository.upsertUploadedResource(
+      remoteId: remoteId,
+      ownerId: scope.ownerId,
+      source: asset,
+      resource: role == PhotoResourceRole.raw ? asset.rawJpegPair!.rawOriginal : asset.rawJpegPair!.processed,
+      checksum: role == PhotoResourceRole.raw ? asset.rawChecksum! : asset.checksum!,
+    );
+  }
+
+  Future<void> finalizeRawJpegPair(LocalAsset asset, {required String jpegId, required String rawId}) async {
+    final scope = await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
+    final lockKey = [scope.serverEndpoint, scope.ownerId, asset.id].join('|');
+    final previous = _rawPairFinalizations[lockKey];
+    final done = Completer<void>();
+    _rawPairFinalizations[lockKey] = done.future;
+    await previous;
+    try {
+      var current = await _assertRawPairCurrent(asset, scope);
+      final ids = await resolveRawPairRemoteIds(asset);
+      ids.requireNoTrash();
+      if (jpegId == rawId || ids.jpegId != jpegId || ids.rawId != rawId) {
+        throw StateError('Both original resources must exist before stacking');
+      }
+      final proof = await _storageRepository.getRawJpegPair(asset.id);
+      if (proof?.pairKey != scope.pairKey) {
+        await _localRepository.markRawPairDiscoveryUnknown(asset.id);
+        throw StateError('Photos original resources changed before stacking');
+      }
+      current = await _assertRawPairCurrent(asset, scope);
+      final old = current.rawPairReceipt;
+      if (old?.completed == true &&
+          old?.serverEndpoint == scope.serverEndpoint &&
+          old?.ownerId == scope.ownerId &&
+          old?.pairKey == scope.pairKey &&
+          old?.jpegId == jpegId &&
+          old?.rawId == rawId) {
+        return;
+      }
+      if (!await _localRepository.saveRawPairReceipt(asset.id, _rawPairReceipt(scope, current, ids))) {
+        throw StateError('Stale pair receipt');
+      }
+      final stack = await _apiRepository.stackWithoutMerging(jpegId, rawId);
+      current = await _assertRawPairCurrent(asset, scope);
+      await _remoteRepository.upsertUploadedResource(
+        remoteId: jpegId,
+        ownerId: scope.ownerId,
+        source: asset,
+        resource: proof!.processed,
+        checksum: asset.checksum!,
+      );
+      await _remoteRepository.upsertUploadedResource(
+        remoteId: rawId,
+        ownerId: scope.ownerId,
+        source: asset,
+        resource: proof.rawOriginal,
+        checksum: asset.rawChecksum!,
+      );
+      await _remoteRepository.stack(scope.ownerId, stack);
+      if (!await _localRepository.saveRawPairReceipt(asset.id, _rawPairReceipt(scope, current, ids, completed: true))) {
+        throw StateError('Stale pair completion');
+      }
+    } finally {
+      done.complete();
+      if (identical(_rawPairFinalizations[lockKey], done.future)) {
+        unawaited(_rawPairFinalizations.remove(lockKey));
+      }
+    }
+  }
+
   Future<BaseAsset?> getAsset(BaseAsset asset) {
     final id = asset is LocalAsset ? asset.id : (asset as RemoteAsset).id;
     return asset is LocalAsset ? _localRepository.get(id) : _remoteRepository.get(id);
