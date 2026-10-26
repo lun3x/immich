@@ -9,6 +9,7 @@ import 'package:immich_mobile/data/db/main/table/local/asset.dart';
 import 'package:immich_mobile/data/db/main/table/local/asset.drift.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_album.repository.drift.dart';
 import 'package:immich_mobile/utils/datetime_helpers.dart';
@@ -244,6 +245,32 @@ class LocalAlbumRepository extends DatabaseAccessor<Drift> with $LocalAlbumRepos
     });
   }
 
+  Future<List<LocalAsset>> getAssetsToDiscoverRawPairs(String albumId) {
+    final local = _db.localAssetEntity;
+    final query =
+        _db.localAlbumAssetEntity.select().join([
+          innerJoin(local, _db.localAlbumAssetEntity.assetId.equalsExp(local.id)),
+        ])..where(
+          _db.localAlbumAssetEntity.albumId.equals(albumId) &
+              local.type.equalsValue(AssetType.image) &
+              (local.rawPairState.equalsValue(RawPairDiscovery.unknown) |
+                  (local.rawPairState.equalsValue(RawPairDiscovery.present) &
+                      (local.checksum.isNull() | local.rawChecksum.isNull()))),
+        );
+    final excluded = _db.localAlbumAssetEntity.selectOnly()
+      ..addColumns([_db.localAlbumAssetEntity.assetId])
+      ..join([
+        innerJoin(
+          _db.localAlbumEntity,
+          _db.localAlbumAssetEntity.albumId.equalsExp(_db.localAlbumEntity.id),
+          useColumns: false,
+        ),
+      ])
+      ..where(_db.localAlbumEntity.backupSelection.equalsValue(BackupSelection.excluded));
+    query.where(local.id.isNotInQuery(excluded));
+    return query.map((row) => row.readTable(local).toDto()).get();
+  }
+
   Future<List<LocalAsset>> getAssetsToHash(String albumId) {
     final query =
         _db.localAlbumAssetEntity.select().join([
@@ -302,6 +329,7 @@ class LocalAlbumRepository extends DatabaseAccessor<Drift> with $LocalAlbumRepos
       for (final asset in localAssets) {
         final companion = LocalAssetEntityCompanion.insert(
           name: asset.name,
+          rawPairState: const Value(RawPairDiscovery.unknown),
           type: asset.type,
           createdAt: Value(asset.createdAt),
           updatedAt: Value(asset.updatedAt),

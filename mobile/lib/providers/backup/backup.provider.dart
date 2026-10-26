@@ -134,8 +134,7 @@ class BackupNotifier extends StateNotifier<BackupState> {
     final cancelToken = Completer<void>();
     _cancelToken = cancelToken;
 
-    // TODO: Once the tmp cleanup is fixed, revert this and handle it differently.
-    // Since we clean up tmp files whenever a foreground upload starts, we need to cancel ongoing background uploads.
+    // Transfer queued work to the foreground transport before starting this run.
     if (CurrentPlatform.isIOS) {
       await _backgroundUploadService.cancel();
     }
@@ -280,7 +279,8 @@ class BackupNotifier extends StateNotifier<BackupState> {
     }
 
     _logger.info("Resuming upload ${tasks.length} assets");
-    return _backgroundUploadService.resume();
+    await _backgroundUploadService.resume();
+    await getBackupStatus(userId);
   }
 }
 

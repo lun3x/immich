@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/asset_edit.model.dart';
 import 'package:immich_mobile/domain/models/exif.model.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
@@ -9,6 +12,7 @@ import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_asset.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_exif.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/storage.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/trashed_local_asset.repository.dart';
 import 'package:immich_mobile/repositories/asset_api.repository.dart';
 import 'package:immich_mobile/repositories/asset_media.repository.dart';
@@ -16,6 +20,7 @@ import 'package:immich_mobile/utils/option.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 class AssetService {
+  final StorageRepository _storageRepository;
   final RemoteAssetRepository _remoteRepository;
   final RemoteExifRepository _exifRepository;
   final LocalAssetRepository _localRepository;
@@ -24,6 +29,7 @@ class AssetService {
   final TrashedLocalAssetRepository _trashedLocalRepository;
 
   const AssetService({
+    required this._storageRepository,
     required this._remoteRepository,
     required this._exifRepository,
     required this._localRepository,
@@ -31,6 +37,246 @@ class AssetService {
     required this._mediaRepository,
     required this._trashedLocalRepository,
   });
+
+  Future<LocalAsset> inspectRawJpegPair(LocalAsset asset) async {
+    if (!CurrentPlatform.isIOS || asset.type != AssetType.image) {
+      return asset;
+    }
+    final current = await _localRepository.getById(asset.id) ?? asset;
+    if (current.rawPairDiscovery != RawPairDiscovery.unknown) {
+      return current;
+    }
+    try {
+      final pair = await _storageRepository.getRawJpegPair(asset.id);
+      await _localRepository.saveRawPairDiscovery(asset.id, pair);
+      return await _localRepository.getById(asset.id) ?? (throw StateError('Photos item no longer exists'));
+    } catch (_) {
+      await _localRepository.markRawPairDiscoveryUnknown(asset.id);
+      rethrow;
+    }
+  }
+
+  Future<LocalAsset> prepareRawJpegPair(
+    LocalAsset asset, {
+    required bool allowNetworkAccess,
+    Completer<void>? cancelToken,
+  }) async {
+    final current = await inspectRawJpegPair(asset);
+    if (!CurrentPlatform.isIOS || current.rawPairDiscovery != RawPairDiscovery.present) {
+      return current;
+    }
+    final pair = current.rawJpegPair!;
+    if (cancelToken?.isCompleted == true) {
+      throw StateError('Photo resource hashing cancelled');
+    }
+    final requests = [
+      if (current.checksum == null) pair.request(PhotoResourceRole.processed),
+      if (current.rawChecksum == null) pair.request(PhotoResourceRole.raw),
+    ];
+    if (requests.isEmpty) {
+      return current;
+    }
+    final results = await _storageRepository.hashPhotoResources(
+      requests,
+      allowNetworkAccess: allowNetworkAccess,
+      cancelToken: cancelToken,
+    );
+    if (cancelToken?.isCompleted == true) {
+      throw StateError('Photo resource hashing cancelled');
+    }
+    String? jpegHash;
+    String? rawHash;
+    for (final request in requests) {
+      final matching = results.where((r) => r.assetId == asset.id && r.resourceKey == request.resource.key).toList();
+      if (matching.length != 1 || matching.single.hash == null || matching.single.error != null) {
+        continue;
+      }
+      if (request.resource.key == pair.processed.key) {
+        jpegHash = matching.single.hash;
+      }
+      if (request.resource.key == pair.rawOriginal.key) {
+        rawHash = matching.single.hash;
+      }
+    }
+    if (!await _localRepository.saveRawPairHashes(
+      asset.id,
+      pair.pairKey,
+      jpegChecksum: jpegHash,
+      rawChecksum: rawHash,
+    )) {
+      throw StateError('Photo resources changed while hashing');
+    }
+    return (await _localRepository.getById(asset.id))!;
+  }
+
+  static final _rawPairFinalizations = <String, Future<void>>{};
+
+  Future<LocalAsset> _assertRawPairCurrent(LocalAsset asset, RawPairReceipt scope) async {
+    final current = await _localRepository.getById(asset.id);
+    if (!CurrentPlatform.isIOS ||
+        !await _localRepository.isRawPairScopeCurrent(scope) ||
+        current?.rawPairDiscovery != RawPairDiscovery.present ||
+        current?.rawJpegPair?.pairKey != scope.pairKey ||
+        current?.checksum == null ||
+        current?.rawChecksum == null ||
+        current?.checksum != asset.checksum ||
+        current?.rawChecksum != asset.rawChecksum) {
+      throw StateError('Photo resources or backup account changed');
+    }
+    return current!;
+  }
+
+  Future<RawPairRemoteIds> resolveRawPairRemoteIds(LocalAsset asset, {RawPairReceipt? expectedScope}) async {
+    final scope = expectedScope ?? await _localRepository.getRawPairScope(asset.rawJpegPair?.pairKey ?? '');
+    await _assertRawPairCurrent(asset, scope);
+    final result = await _apiRepository.checkUploadChecksums({'jpeg': asset.checksum!, 'raw': asset.rawChecksum!});
+    await _assertRawPairCurrent(asset, scope);
+    final jpeg = result['jpeg'];
+    final raw = result['raw'];
+    if (jpeg == null || raw == null) {
+      throw StateError('Incomplete resource presence check');
+    }
+    final ids = RawPairRemoteIds(
+      jpegId: jpeg.isTrashed ? null : jpeg.assetId,
+      rawId: raw.isTrashed ? null : raw.assetId,
+      jpegTrashed: jpeg.isTrashed,
+      rawTrashed: raw.isTrashed,
+    );
+    final current = await _assertRawPairCurrent(asset, scope);
+    final old = current.rawPairReceipt;
+    if (old != null &&
+        old.serverEndpoint == scope.serverEndpoint &&
+        old.ownerId == scope.ownerId &&
+        old.pairKey == scope.pairKey &&
+        (old.rawId != ids.rawId || old.jpegId != ids.jpegId)) {
+      if (!await _localRepository.saveRawPairReceipt(asset.id, _rawPairReceipt(scope, current, ids))) {
+        throw StateError('Stale resource presence');
+      }
+    }
+    return ids;
+  }
+
+  RawPairReceipt _rawPairReceipt(
+    RawPairReceipt scope,
+    LocalAsset current,
+    RawPairRemoteIds ids, {
+    bool completed = false,
+  }) {
+    final old = current.rawPairReceipt;
+    final sameScope =
+        old?.serverEndpoint == scope.serverEndpoint && old?.ownerId == scope.ownerId && old?.pairKey == scope.pairKey;
+    return RawPairReceipt(
+      serverEndpoint: scope.serverEndpoint,
+      ownerId: scope.ownerId,
+      pairKey: scope.pairKey,
+      rawId: ids.rawId,
+      jpegId: ids.jpegId,
+      rawTaskId: sameScope ? old?.rawTaskId : null,
+      jpegTaskId: sameScope ? old?.jpegTaskId : null,
+      completed: completed,
+    );
+  }
+
+  Future<void> recordRawPairUpload(
+    LocalAsset asset, {
+    required PhotoResourceRole role,
+    required String remoteId,
+    RawPairReceipt? expectedScope,
+  }) async {
+    final scope = expectedScope ?? await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
+    final ids = await resolveRawPairRemoteIds(asset, expectedScope: scope);
+    ids.requireNoTrash();
+    if ((role == PhotoResourceRole.raw ? ids.rawId : ids.jpegId) != remoteId) {
+      throw StateError('Uploaded resource could not be confirmed on the server');
+    }
+    final current = await _assertRawPairCurrent(asset, scope);
+    final old = current.rawPairReceipt;
+    final completed =
+        old?.completed == true &&
+        old?.serverEndpoint == scope.serverEndpoint &&
+        old?.ownerId == scope.ownerId &&
+        old?.pairKey == scope.pairKey &&
+        old?.jpegId == ids.jpegId &&
+        old?.rawId == ids.rawId;
+    if (!await _localRepository.saveRawPairReceipt(
+      asset.id,
+      _rawPairReceipt(scope, current, ids, completed: completed),
+    )) {
+      throw StateError('Photo resources changed after upload');
+    }
+    await _remoteRepository.upsertUploadedResource(
+      remoteId: remoteId,
+      ownerId: scope.ownerId,
+      source: asset,
+      resource: role == PhotoResourceRole.raw ? asset.rawJpegPair!.rawOriginal : asset.rawJpegPair!.processed,
+      checksum: role == PhotoResourceRole.raw ? asset.rawChecksum! : asset.checksum!,
+    );
+  }
+
+  Future<void> finalizeRawJpegPair(
+    LocalAsset asset, {
+    required String jpegId,
+    required String rawId,
+    RawPairReceipt? expectedScope,
+  }) async {
+    final scope = expectedScope ?? await _localRepository.getRawPairScope(asset.rawJpegPair!.pairKey);
+    final lockKey = [scope.serverEndpoint, scope.ownerId, asset.id].join('|');
+    final previous = _rawPairFinalizations[lockKey];
+    final done = Completer<void>();
+    _rawPairFinalizations[lockKey] = done.future;
+    await previous;
+    try {
+      var current = await _assertRawPairCurrent(asset, scope);
+      final ids = await resolveRawPairRemoteIds(asset, expectedScope: scope);
+      ids.requireNoTrash();
+      if (jpegId == rawId || ids.jpegId != jpegId || ids.rawId != rawId) {
+        throw StateError('Both original resources must exist before stacking');
+      }
+      final proof = await _storageRepository.getRawJpegPair(asset.id);
+      if (proof?.pairKey != scope.pairKey) {
+        await _localRepository.markRawPairDiscoveryUnknown(asset.id);
+        throw StateError('Photos original resources changed before stacking');
+      }
+      current = await _assertRawPairCurrent(asset, scope);
+      final old = current.rawPairReceipt;
+      if (old?.completed == true &&
+          old?.serverEndpoint == scope.serverEndpoint &&
+          old?.ownerId == scope.ownerId &&
+          old?.pairKey == scope.pairKey &&
+          old?.jpegId == jpegId &&
+          old?.rawId == rawId) {
+        return;
+      }
+      if (!await _localRepository.saveRawPairReceipt(asset.id, _rawPairReceipt(scope, current, ids))) {
+        throw StateError('Stale pair receipt');
+      }
+      final stack = await _apiRepository.stackWithoutMerging(jpegId, rawId);
+      current = await _assertRawPairCurrent(asset, scope);
+      await _remoteRepository.upsertUploadedResource(
+        remoteId: jpegId,
+        ownerId: scope.ownerId,
+        source: asset,
+        resource: proof!.processed,
+        checksum: asset.checksum!,
+      );
+      await _remoteRepository.upsertUploadedResource(
+        remoteId: rawId,
+        ownerId: scope.ownerId,
+        source: asset,
+        resource: proof.rawOriginal,
+        checksum: asset.rawChecksum!,
+      );
+      await _remoteRepository.stack(scope.ownerId, stack);
+      if (!await _localRepository.saveRawPairReceipt(asset.id, _rawPairReceipt(scope, current, ids, completed: true))) {
+        throw StateError('Stale pair completion');
+      }
+    } finally {
+      done.complete();
+      if (identical(_rawPairFinalizations[lockKey], done.future)) {
+        unawaited(_rawPairFinalizations.remove(lockKey));
+      }
+    }
+  }
 
   Future<BaseAsset?> getAsset(BaseAsset asset) {
     final id = asset is LocalAsset ? asset.id : (asset as RemoteAsset).id;

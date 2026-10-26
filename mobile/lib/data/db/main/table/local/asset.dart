@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:immich_mobile/data/db/main/table/local/asset.drift.dart';
 import 'package:immich_mobile/data/db/util/asset_mixin.dart';
 import 'package:immich_mobile/data/db/util/datetime_clamp_type.dart';
 import 'package:immich_mobile/data/db/util/defaults_mixin.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 
 @TableIndex.sql('CREATE INDEX IF NOT EXISTS idx_local_asset_checksum ON local_asset_entity (checksum)')
 @TableIndex.sql('CREATE INDEX IF NOT EXISTS idx_local_asset_cloud_id ON local_asset_entity (i_cloud_id)')
@@ -37,6 +40,18 @@ class LocalAssetEntity extends Table with DriftDefaultsMixin, AssetEntityMixin {
   /// Checksum of the last synced version of this asset
   TextColumn get previousChecksum => text().nullable()();
 
+  IntColumn get rawPairState => intEnum<RawPairDiscovery>().withDefault(const Constant(0))();
+  TextColumn get rawPair => text().nullable()();
+  TextColumn get rawChecksum => text().nullable()();
+  TextColumn get rawReceiptServer => text().nullable()();
+  TextColumn get rawReceiptUserId => text().nullable()();
+  TextColumn get rawReceiptPairKey => text().nullable()();
+  TextColumn get rawReceiptRawId => text().nullable()();
+  TextColumn get rawReceiptJpegId => text().nullable()();
+  TextColumn get rawReceiptRawTaskId => text().nullable()();
+  TextColumn get rawReceiptJpegTaskId => text().nullable()();
+  BoolColumn get rawPairCompleted => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -61,5 +76,20 @@ extension LocalAssetEntityDataDomainExtension on LocalAssetEntityData {
     longitude: longitude,
     cloudId: iCloudId,
     isEdited: false,
+    rawPairDiscovery: rawPairState,
+    rawJpegPair: rawPair == null ? null : RawJpegPair.fromMap(jsonDecode(rawPair!) as Map<String, dynamic>),
+    rawChecksum: rawChecksum,
+    rawPairReceipt: rawReceiptServer == null || rawReceiptUserId == null || rawReceiptPairKey == null
+        ? null
+        : RawPairReceipt(
+            serverEndpoint: rawReceiptServer!,
+            ownerId: rawReceiptUserId!,
+            pairKey: rawReceiptPairKey!,
+            rawId: rawReceiptRawId,
+            jpegId: rawReceiptJpegId,
+            rawTaskId: rawReceiptRawTaskId,
+            jpegTaskId: rawReceiptJpegTaskId,
+            completed: rawPairCompleted,
+          ),
   );
 }

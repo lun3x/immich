@@ -1,3 +1,4 @@
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/exif.model.dart';
 
 part 'local_asset.model.dart';

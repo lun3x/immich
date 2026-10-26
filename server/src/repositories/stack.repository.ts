@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { jsonArrayFrom } from 'kysely/helpers/postgres';
+import { jsonArrayFrom, jsonObjectFrom } from 'kysely/helpers/postgres';
 import { InjectKysely } from 'nestjs-kysely';
 import type { ExpressionBuilder, Insertable, Kysely, Updateable } from 'kysely';
-import { columns } from 'src/database.js';
+import { Stack, columns } from 'src/database.js';
 import { DummyValue, GenerateSql } from 'src/decorators.js';
 import { DB } from 'src/schema/index.js';
 import { StackTable } from 'src/schema/tables/stack.table.js';
@@ -12,6 +12,8 @@ export interface StackSearch {
   ownerId: string;
   primaryAssetId?: string;
 }
+
+type NonMergingStackResult = { status: 'created' | 'existing'; stack: Stack } | { status: 'conflict' };
 
 const withAssets = (eb: ExpressionBuilder<DB, 'stack'>, withTags = false) => {
   return jsonArrayFrom(
@@ -49,6 +51,75 @@ const withAssets = (eb: ExpressionBuilder<DB, 'stack'>, withTags = false) => {
 @Injectable()
 export class StackRepository {
   constructor(@InjectKysely() private db: Kysely<DB>) {}
+
+  async createWithoutMerging(
+    entity: Omit<Insertable<StackTable>, 'primaryAssetId'>,
+    assetIds: [string, string],
+  ): Promise<NonMergingStackResult> {
+    return this.db.transaction().execute(async (tx) => {
+      // Lock in a consistent order, then inspect the committed memberships. No
+      // existing stack is deleted or expanded by this path.
+      const assets = await tx
+        .selectFrom('asset')
+        .select(['id', 'ownerId', 'deletedAt', 'stackId'])
+        .where('id', 'in', assetIds)
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+
+      if (assets.length !== 2 || assets.some((asset) => asset.ownerId !== entity.ownerId || asset.deletedAt)) {
+        return { status: 'conflict' };
+      }
+
+      let stackId = assets[0].stackId;
+      let status: 'created' | 'existing' = 'existing';
+      if (stackId || assets[1].stackId) {
+        if (!stackId || stackId !== assets[1].stackId) {
+          return { status: 'conflict' };
+        }
+      } else {
+        const created = await tx
+          .insertInto('stack')
+          .values({ ...entity, primaryAssetId: assetIds[0] })
+          .returning('id')
+          .executeTakeFirstOrThrow();
+        stackId = created.id;
+        status = 'created';
+        await tx.updateTable('asset').set({ stackId }).where('id', 'in', assetIds).execute();
+      }
+
+      // Metadata extraction can lag behind upload. Unlike an inner lateral join,
+      // a nullable EXIF object keeps both newly uploaded originals in the response.
+      const stack = await tx
+        .selectFrom('stack')
+        .selectAll('stack')
+        .select((eb) =>
+          jsonArrayFrom(
+            eb
+              .selectFrom('asset')
+              .selectAll('asset')
+              .select((eb) =>
+                jsonObjectFrom(
+                  eb.selectFrom('asset_exif').select(columns.exif).whereRef('asset_exif.assetId', '=', 'asset.id'),
+                ).as('exifInfo'),
+              )
+              .whereRef('asset.stackId', '=', 'stack.id')
+              .where('asset.deletedAt', 'is', null)
+              .$call(withDefaultVisibility)
+              .orderBy('asset.fileCreatedAt', 'asc'),
+          ).as('assets'),
+        )
+        .where('stack.id', '=', stackId)
+        .where('stack.ownerId', '=', entity.ownerId)
+        .executeTakeFirst();
+
+      if (!stack) {
+        return { status: 'conflict' };
+      }
+
+      return { status, stack };
+    });
+  }
 
   @GenerateSql({ params: [{ ownerId: DummyValue.UUID }] })
   search(query: StackSearch) {

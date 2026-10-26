@@ -43,6 +43,7 @@ void main() {
     exifRepository = mocks.remoteExif.repo;
 
     sut = AssetService(
+      storageRepository: MockStorageRepository(),
       remoteRepository: remoteRepository,
       exifRepository: exifRepository,
       localRepository: mocks.localAsset.repo,

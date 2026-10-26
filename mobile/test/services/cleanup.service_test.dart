@@ -5,6 +5,7 @@ import 'package:mocktail/mocktail.dart';
 
 import '../infrastructure/repository.mock.dart';
 import '../repository.mocks.dart';
+import '../service.mocks.dart';
 
 void main() {
   late CleanupService sut;
@@ -15,7 +16,7 @@ void main() {
   setUp(() {
     localAssetRepository = MockLocalAssetRepository();
     assetMediaRepository = MockAssetMediaRepository();
-    sut = CleanupService(localAssetRepository, assetMediaRepository);
+    sut = CleanupService(localAssetRepository, assetMediaRepository, MockAssetService());
   });
 
   group('CleanupService.deleteLocalAssets', () {

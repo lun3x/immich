@@ -10,14 +10,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/services/store.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/settings.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/store.repository.dart';
+import 'package:immich_mobile/platform/connectivity_api.g.dart';
 import 'package:immich_mobile/services/background_upload.service.dart';
 import 'package:mocktail/mocktail.dart';
 
+import '../api.mocks.dart';
 import '../fixtures/asset.stub.dart';
 import '../infrastructure/repository.mock.dart';
 import '../mocks/asset_entity.mock.dart';
@@ -33,6 +36,7 @@ void main() {
   late MockAssetMediaRepository mockAssetMediaRepository;
   late MockAssetService mockAssetService;
   late Drift db;
+  late MockConnectivityApi connectivity;
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -46,6 +50,7 @@ void main() {
 
     await Store.put(StoreKey.serverEndpoint, 'http://test-server.com');
     await Store.put(StoreKey.deviceId, 'test-device-id');
+    registerFallbackValue(LocalAssetStub.image1);
   });
 
   setUp(() {
@@ -55,6 +60,17 @@ void main() {
     mockBackupRepository = MockBackupRepository();
     mockAssetMediaRepository = MockAssetMediaRepository();
     mockAssetService = MockAssetService();
+    connectivity = MockConnectivityApi();
+    when(() => connectivity.getCapabilities()).thenAnswer((_) async => [NetworkCapability.unmetered]);
+    when(
+      () => mockAssetService.prepareRawJpegPair(
+        any(),
+        allowNetworkAccess: any(named: 'allowNetworkAccess'),
+        cancelToken: any(named: 'cancelToken'),
+      ),
+    ).thenAnswer(
+      (i) async => (i.positionalArguments.single as LocalAsset).copyWith(rawPairDiscovery: RawPairDiscovery.absent),
+    );
     when(() => mockAssetService.stackEditedUpload(any(), any(), any())).thenAnswer((_) async {});
 
     sut = BackgroundUploadService(
@@ -64,6 +80,7 @@ void main() {
       mockBackupRepository,
       mockAssetMediaRepository,
       mockAssetService,
+      connectivityApi: connectivity,
     );
 
     mockUploadRepository.onUploadStatus = (_) {};
@@ -242,6 +259,7 @@ void main() {
         mockBackupRepository,
         mockAssetMediaRepository,
         mockAssetService,
+        connectivityApi: connectivity,
       );
       addTearDown(() => sutWithV24.dispose());
 
@@ -293,6 +311,7 @@ void main() {
         mockBackupRepository,
         mockAssetMediaRepository,
         mockAssetService,
+        connectivityApi: connectivity,
       );
       addTearDown(() => sutAndroid.dispose());
 
@@ -334,6 +353,7 @@ void main() {
         mockBackupRepository,
         mockAssetMediaRepository,
         mockAssetService,
+        connectivityApi: connectivity,
       );
       addTearDown(() => sutWithV24.dispose());
 
@@ -375,6 +395,7 @@ void main() {
         mockBackupRepository,
         mockAssetMediaRepository,
         mockAssetService,
+        connectivityApi: connectivity,
       );
       addTearDown(() => sutWithV24.dispose());
 

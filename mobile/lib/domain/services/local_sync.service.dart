@@ -342,7 +342,8 @@ class LocalSyncService {
 
     final firstAdjustment = a.adjustmentTime?.millisecondsSinceEpoch ?? 0;
     final secondAdjustment = b.adjustmentTime?.millisecondsSinceEpoch ?? 0;
-    return firstAdjustment == secondAdjustment &&
+    return a.updatedAt.isAtSameMomentAs(b.updatedAt) &&
+        firstAdjustment == secondAdjustment &&
         a.createdAt.isAtSameMomentAs(b.createdAt) &&
         a.width == b.width &&
         a.height == b.height &&

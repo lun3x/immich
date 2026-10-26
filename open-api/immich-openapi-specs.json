@@ -29895,6 +29895,10 @@
       },
       "StackCreateDto": {
         "properties": {
+          "allowMerge": {
+            "description": "Allow merging existing stacks (default true)",
+            "type": "boolean"
+          },
           "assetIds": {
             "description": "Asset IDs (first becomes primary, min 2)",
             "items": {

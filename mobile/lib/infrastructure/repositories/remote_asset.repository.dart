@@ -7,10 +7,12 @@ import 'package:immich_mobile/data/db/main/table/remote/exif.dart';
 import 'package:immich_mobile/data/db/main/table/remote/exif.drift.dart';
 import 'package:immich_mobile/data/db/main/table/remote/stack.drift.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
 import 'package:immich_mobile/domain/models/asset_edit.model.dart';
 import 'package:immich_mobile/domain/models/exif.model.dart';
 import 'package:immich_mobile/domain/models/stack.model.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_asset.repository.drift.dart';
+import 'package:immich_mobile/utils/datetime_helpers.dart';
 import 'package:immich_mobile/utils/option.dart';
 
 @DriftAccessor()
@@ -39,6 +41,35 @@ class RemoteAssetRepository extends DatabaseAccessor<Drift> with $RemoteAssetRep
 
   Stream<RemoteAsset?> watch(String id) {
     return _assetSelectable(id).watchSingleOrNull();
+  }
+
+  Future<void> upsertUploadedResource({
+    required String remoteId,
+    required String ownerId,
+    required LocalAsset source,
+    required PhotoResource resource,
+    required String checksum,
+  }) async {
+    await _db
+        .into(_db.remoteAssetEntity)
+        .insert(
+          RemoteAssetEntityCompanion.insert(
+            id: remoteId,
+            ownerId: ownerId,
+            name: resource.filename,
+            checksum: checksum,
+            type: AssetType.image,
+            visibility: AssetVisibility.timeline,
+            createdAt: Value(source.createdAt),
+            updatedAt: Value(source.updatedAt),
+            width: Value(source.width),
+            height: Value(source.height),
+            localDateTime: Value(source.createdAt.toLocal()),
+            groupDate: Value(timelineGroupDate(source.createdAt.toLocal())),
+            isFavorite: Value(source.isFavorite),
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
   }
 
   Future<RemoteAsset?> get(String id) {

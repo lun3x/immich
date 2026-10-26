@@ -9,6 +9,11 @@ class LocalAsset extends BaseAsset {
   @override
   final AssetPlaybackStyle playbackStyle;
 
+  final RawPairDiscovery rawPairDiscovery;
+  final RawJpegPair? rawJpegPair;
+  final String? rawChecksum;
+  final RawPairReceipt? rawPairReceipt;
+
   final DateTime? adjustmentTime;
   final double? latitude;
   final double? longitude;
@@ -28,6 +33,10 @@ class LocalAsset extends BaseAsset {
     super.isFavorite = false,
     this.orientation = 0,
     required this.playbackStyle,
+    this.rawPairDiscovery = RawPairDiscovery.unknown,
+    this.rawJpegPair,
+    this.rawChecksum,
+    this.rawPairReceipt,
     this.adjustmentTime,
     this.latitude,
     this.longitude,
@@ -86,6 +95,10 @@ class LocalAsset extends BaseAsset {
         orientation == other.orientation &&
         playbackStyle == other.playbackStyle &&
         adjustmentTime == other.adjustmentTime &&
+        rawPairDiscovery == other.rawPairDiscovery &&
+        rawJpegPair == other.rawJpegPair &&
+        rawChecksum == other.rawChecksum &&
+        rawPairReceipt == other.rawPairReceipt &&
         latitude == other.latitude &&
         longitude == other.longitude;
   }
@@ -98,6 +111,10 @@ class LocalAsset extends BaseAsset {
       orientation.hashCode ^
       playbackStyle.hashCode ^
       adjustmentTime.hashCode ^
+      rawPairDiscovery.hashCode ^
+      rawJpegPair.hashCode ^
+      rawChecksum.hashCode ^
+      rawPairReceipt.hashCode ^
       latitude.hashCode ^
       longitude.hashCode;
 
@@ -116,6 +133,10 @@ class LocalAsset extends BaseAsset {
     bool? isFavorite,
     int? orientation,
     AssetPlaybackStyle? playbackStyle,
+    RawPairDiscovery? rawPairDiscovery,
+    RawJpegPair? rawJpegPair,
+    String? rawChecksum,
+    RawPairReceipt? rawPairReceipt,
     DateTime? adjustmentTime,
     double? latitude,
     double? longitude,
@@ -136,6 +157,10 @@ class LocalAsset extends BaseAsset {
       isFavorite: isFavorite ?? this.isFavorite,
       orientation: orientation ?? this.orientation,
       playbackStyle: playbackStyle ?? this.playbackStyle,
+      rawPairDiscovery: rawPairDiscovery ?? this.rawPairDiscovery,
+      rawJpegPair: rawJpegPair ?? this.rawJpegPair,
+      rawChecksum: rawChecksum ?? this.rawChecksum,
+      rawPairReceipt: rawPairReceipt ?? this.rawPairReceipt,
       adjustmentTime: adjustmentTime ?? this.adjustmentTime,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,

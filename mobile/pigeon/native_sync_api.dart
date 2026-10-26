@@ -107,6 +107,56 @@ enum CloudIdErrorKind {
   unknown,
 }
 
+class PlatformPhotoResource {
+  final String key;
+  final int type;
+  final String filename;
+  final String uniformTypeIdentifier;
+  const PlatformPhotoResource({
+    required this.key,
+    required this.type,
+    required this.filename,
+    required this.uniformTypeIdentifier,
+  });
+}
+
+class PlatformRawJpegPair {
+  final String assetId;
+  final String pairKey;
+  final PlatformPhotoResource jpegOriginal;
+  final PlatformPhotoResource rawOriginal;
+  final PlatformPhotoResource processed;
+  const PlatformRawJpegPair({
+    required this.assetId,
+    required this.pairKey,
+    required this.jpegOriginal,
+    required this.rawOriginal,
+    required this.processed,
+  });
+}
+
+class RawJpegPairResult {
+  final String assetId;
+  final PlatformRawJpegPair? pair;
+  final String? error;
+  const RawJpegPairResult({required this.assetId, this.pair, this.error});
+}
+
+class PhotoResourceRequest {
+  final String assetId;
+  final String pairKey;
+  final PlatformPhotoResource resource;
+  const PhotoResourceRequest({required this.assetId, required this.pairKey, required this.resource});
+}
+
+class PhotoResourceHashResult {
+  final String assetId;
+  final String resourceKey;
+  final String? hash;
+  final String? error;
+  const PhotoResourceHashResult({required this.assetId, required this.resourceKey, this.hash, this.error});
+}
+
 class CloudIdResult {
   final String assetId;
   final String? error;
@@ -118,6 +168,23 @@ class CloudIdResult {
 
 @HostApi()
 abstract class NativeSyncApi {
+  @async
+  List<RawJpegPairResult> getRawJpegPairs(List<String> assetIds);
+
+  @async
+  List<PhotoResourceHashResult> hashPhotoResources(
+    List<PhotoResourceRequest> requests,
+    String operationId, {
+    bool allowNetworkAccess = false,
+  });
+
+  void cancelPhotoResourceHashing(String operationId);
+
+  @async
+  String exportPhotoResource(PhotoResourceRequest request, String destinationPath, {bool allowNetworkAccess = false});
+
+  void cancelPhotoResourceExport(String destinationPath);
+
   @async
   bool shouldFullSync();
 

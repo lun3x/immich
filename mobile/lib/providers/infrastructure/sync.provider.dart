@@ -4,6 +4,7 @@ import 'package:immich_mobile/domain/services/local_sync.service.dart';
 import 'package:immich_mobile/domain/services/sync_stream.service.dart';
 import 'package:immich_mobile/infrastructure/repositories/sync_api.repository.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/asset.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/cancel.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/platform.provider.dart';
@@ -42,6 +43,8 @@ final localSyncServiceProvider = Provider((ref) {
 final hashServiceProvider = Provider((ref) {
   final db = ref.watch(driftProvider);
   return HashService(
+    connectivityApi: ref.watch(connectivityApiProvider),
+    assetService: ref.watch(assetServiceProvider),
     localAlbumRepository: db.localAlbumRepository,
     localAssetRepository: db.localAssetRepository,
     nativeSyncApi: ref.watch(nativeSyncApiProvider),

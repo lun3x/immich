@@ -20,6 +20,26 @@ describe(StackController.name, () => {
   });
 
   describe('POST /stacks', () => {
+    it('should pass the non-merging option to stack creation', async () => {
+      const assetIds = [factory.uuid(), factory.uuid()];
+      const auth = factory.auth();
+      ctx.authenticate.mockResolvedValue(auth);
+      service.create.mockResolvedValue({ id: factory.uuid(), primaryAssetId: assetIds[0], assets: [] });
+
+      const { status } = await request(ctx.getHttpServer()).post('/stacks').send({ assetIds, allowMerge: false });
+
+      expect(status).toBe(201);
+      expect(service.create).toHaveBeenCalledWith(auth, { assetIds, allowMerge: false });
+    });
+
+    it('should reject a non-boolean merge option', async () => {
+      const { status } = await request(ctx.getHttpServer())
+        .post('/stacks')
+        .send({ assetIds: [factory.uuid(), factory.uuid()], allowMerge: 'false' });
+
+      expect(status).toBe(400);
+    });
+
     it('should require at least two assets', async () => {
       const { status, body } = await request(ctx.getHttpServer())
         .post('/stacks')
