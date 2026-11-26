@@ -160,7 +160,7 @@ class Drift extends $Drift {
   }
 
   @override
-  int get schemaVersion => 36;
+  int get schemaVersion => 37;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -382,6 +382,19 @@ class Drift extends $Drift {
               },
               from35To36: (m, v36) async {
                 await m.addColumn(v36.localAssetEntity, v36.localAssetEntity.unsupported);
+              },
+              from36To37: (m, v37) async {
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawPairState);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawPair);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawChecksum);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptServer);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptUserId);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptPairKey);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptRawId);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptJpegId);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptRawTaskId);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawReceiptJpegTaskId);
+                await m.addColumn(v37.localAssetEntity, v37.localAssetEntity.rawPairCompleted);
               },
             ),
           );

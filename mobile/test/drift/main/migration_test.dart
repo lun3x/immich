@@ -41,6 +41,23 @@ void main() {
     }
   });
 
+  test(
+    'v37 preserves the primary checksum and marks old images unknown',
+    () async {
+      final schema = await verifier.schemaAt(36);
+      schema.rawDatabase.execute(
+        "INSERT INTO local_asset_entity (id, name, type, checksum) VALUES ('old', 'old.jpg', 1, 'jpeg-hash')",
+      );
+      final db = Drift(schema.newConnection());
+      await verifier.migrateAndValidate(db, 37);
+      final row = await db.select(db.localAssetEntity).getSingle();
+      expect(row.checksum, 'jpeg-hash');
+      expect(row.rawPairState.index, 0);
+      expect(row.rawChecksum, null);
+      await db.close();
+    },
+  );
+
   group('v35 group_date backfill', () {
     Future<List<Bucket>> loadBuckets(Drift db) => TimelineRepository(
       db,

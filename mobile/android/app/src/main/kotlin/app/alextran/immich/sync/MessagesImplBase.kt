@@ -503,6 +503,22 @@ open class NativeSyncApiImplBase(context: Context) : ImmichPlugin(), ActivityAwa
     hashTask = null
   }
 
+  fun getRawJpegPairs(assetIds: List<String>, callback: (Result<List<RawJpegPairResult>>) -> Unit) {
+    callback(Result.success(assetIds.map { RawJpegPairResult(assetId = it) }))
+  }
+
+  fun hashPhotoResources(requests: List<PhotoResourceRequest>, operationId: String, allowNetworkAccess: Boolean, callback: (Result<List<PhotoResourceHashResult>>) -> Unit) {
+    callback(Result.failure(FlutterError("UNSUPPORTED_OS", "Original JPEG + RAW pairs are only available on iOS", null)))
+  }
+
+  fun cancelPhotoResourceHashing(operationId: String) = Unit
+
+  fun exportPhotoResource(request: PhotoResourceRequest, destinationPath: String, allowNetworkAccess: Boolean, callback: (Result<String>) -> Unit) {
+    callback(Result.failure(FlutterError("UNSUPPORTED_OS", "Original JPEG + RAW pairs are only available on iOS", null)))
+  }
+
+  fun cancelPhotoResourceExport(destinationPath: String) {}
+
   fun cancelSync() {
     syncJob?.cancel()
     syncJob = null

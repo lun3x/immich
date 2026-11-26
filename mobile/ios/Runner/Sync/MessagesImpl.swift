@@ -36,6 +36,9 @@ class NativeSyncApiImpl: ImmichPlugin, NativeSyncApi, FlutterPlugin {
   private let recoveredAlbumSubType = 1000000219
   
   private var hashTask: Task<Void?, Error>?
+  private let resourceExportLock = NSLock()
+  private var resourceExports: [String: PhotoResourceDataRequest] = [:]
+  private var resourceHashes: [String: PhotoResourceDataRequest] = [:]
   private static let hashCancelledCode = "HASH_CANCELLED"
   private static let hashCancelled = Result<[HashResult], Error>.failure(PigeonError(code: hashCancelledCode, message: "Hashing cancelled", details: nil))
   
@@ -354,6 +357,138 @@ class NativeSyncApiImpl: ImmichPlugin, NativeSyncApi, FlutterPlugin {
   func cancelHashing() {
     hashTask?.cancel()
     hashTask = nil
+    cancelResourceHashes()
+  }
+
+  func getRawJpegPairs(assetIds: [String], completion: @escaping (Result<[RawJpegPairResult], Error>) -> Void) {
+    Task.detached(priority: .utility) { [self] in
+      let results = assetIds.map { assetId -> RawJpegPairResult in
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil).firstObject else {
+          return RawJpegPairResult(assetId: assetId, error: "Photos item is unavailable")
+        }
+        do {
+          guard let pair = try asset.rawJpegResources() else { return RawJpegPairResult(assetId: assetId) }
+          let selection = pair.selection
+          return RawJpegPairResult(assetId: assetId, pair: PlatformRawJpegPair(
+            assetId: assetId, pairKey: selection.pairKey,
+            jpegOriginal: platformResource(selection.jpegOriginal), rawOriginal: platformResource(selection.rawOriginal),
+            processed: platformResource(selection.processed)
+          ))
+        } catch {
+          return RawJpegPairResult(assetId: assetId, error: "Cannot identify original JPEG + RAW resources: \(error)")
+        }
+      }
+      completeWhenActive(for: completion, with: .success(results))
+    }
+  }
+
+  private func platformResource(_ resource: RawPhotoResourceDescriptor) -> PlatformPhotoResource {
+    PlatformPhotoResource(key: resource.key, type: Int64(resource.type), filename: resource.filename, uniformTypeIdentifier: resource.uniformTypeIdentifier)
+  }
+
+  private func photoResource(_ request: PhotoResourceRequest) throws -> PHAssetResource {
+    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [request.assetId], options: nil).firstObject,
+          let pair = try asset.rawJpegResources(), pair.selection.pairKey == request.pairKey,
+          [pair.selection.rawOriginal.key, pair.selection.processed.key].contains(request.resource.key),
+          let resource = pair.resources[request.resource.key],
+          resource.originalFilename == request.resource.filename,
+          resource.type.rawValue == Int(request.resource.type),
+          resource.uniformTypeIdentifier == request.resource.uniformTypeIdentifier else {
+      throw PigeonError(code: "STALE_PHOTO_RESOURCES", message: "The original JPEG + RAW pair has changed or is unavailable", details: nil)
+    }
+    return resource
+  }
+
+  func hashPhotoResources(requests: [PhotoResourceRequest], operationId: String, allowNetworkAccess: Bool, completion: @escaping (Result<[PhotoResourceHashResult], Error>) -> Void) {
+    let transfer = PhotoResourceDataRequest()
+    // Register synchronously on the host channel before starting async work, so
+    // the following cancellation message can cancel even before a PhotoKit ID exists.
+    setResourceHash(transfer, id: operationId)
+    Task { [self] in
+      defer { setResourceHash(nil, id: operationId) }
+      var results: [PhotoResourceHashResult] = []
+      // Stream one resource at a time so a batch of large RAWs cannot exhaust memory.
+      for request in requests {
+        do {
+          try Task.checkCancellation()
+          let resource = try photoResource(request)
+          var hasher = Insecure.SHA1()
+          try await transfer.read(resource, allowNetworkAccess: allowNetworkAccess) { data in
+            hasher.update(data: data)
+          }
+          try Task.checkCancellation()
+          results.append(PhotoResourceHashResult(assetId: request.assetId, resourceKey: request.resource.key, hash: Data(hasher.finalize()).base64EncodedString()))
+        } catch is CancellationError {
+          completeWhenActive(for: completion, with: .failure(PigeonError(code: Self.hashCancelledCode, message: "Hashing cancelled", details: nil)))
+          return
+        } catch {
+          results.append(PhotoResourceHashResult(assetId: request.assetId, resourceKey: request.resource.key, error: "Failed to hash original: \(error)"))
+        }
+      }
+      completeWhenActive(for: completion, with: .success(results))
+    }
+  }
+
+  private func setResourceHash(_ transfer: PhotoResourceDataRequest?, id: String) {
+    resourceExportLock.lock()
+    resourceHashes[id] = transfer
+    resourceExportLock.unlock()
+  }
+
+  func cancelPhotoResourceHashing(operationId: String) {
+    resourceExportLock.lock()
+    let transfer = resourceHashes[operationId]
+    resourceExportLock.unlock()
+    transfer?.cancel()
+  }
+
+  private func cancelResourceHashes() {
+    resourceExportLock.lock()
+    let transfers = Array(resourceHashes.values)
+    resourceExportLock.unlock()
+    for transfer in transfers { transfer.cancel() }
+  }
+
+  private func setResourceExport(_ transfer: PhotoResourceDataRequest?, path: String) {
+    resourceExportLock.lock()
+    resourceExports[path] = transfer
+    resourceExportLock.unlock()
+  }
+
+  func cancelPhotoResourceExport(destinationPath: String) {
+    resourceExportLock.lock()
+    let transfer = resourceExports[destinationPath]
+    resourceExportLock.unlock()
+    transfer?.cancel()
+  }
+
+  func exportPhotoResource(request: PhotoResourceRequest, destinationPath: String, allowNetworkAccess: Bool, completion: @escaping (Result<String, Error>) -> Void) {
+    let transfer = PhotoResourceDataRequest()
+    setResourceExport(transfer, path: destinationPath)
+    Task { [self] in
+      defer { setResourceExport(nil, path: destinationPath) }
+      do {
+        let resource = try photoResource(request)
+        guard FileManager.default.createFile(atPath: destinationPath, contents: nil) else {
+          throw PigeonError(code: "EXPORT_FAILED", message: "Cannot create original-resource export", details: nil)
+        }
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: destinationPath))
+        do {
+          try await transfer.read(resource, allowNetworkAccess: allowNetworkAccess) { data in
+            try handle.write(contentsOf: data)
+          }
+          try handle.close()
+        } catch {
+          try? handle.close()
+          throw error
+        }
+        completeWhenActive(for: completion, with: .success(destinationPath))
+      } catch {
+        try? FileManager.default.removeItem(atPath: destinationPath)
+        let code = error is CancellationError ? "EXPORT_CANCELLED" : "EXPORT_FAILED"
+        completeWhenActive(for: completion, with: .failure(PigeonError(code: code, message: "Cannot export original resource: \(error)", details: nil)))
+      }
+    }
   }
   
   func cancelSync() {

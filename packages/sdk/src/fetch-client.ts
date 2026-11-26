@@ -3170,6 +3170,8 @@ export type StackResponseDto = {
     primaryAssetId: string;
 };
 export type StackCreateDto = {
+    /** Allow merging existing stacks (default true) */
+    allowMerge?: boolean;
     /** Asset IDs (first becomes primary, min 2) */
     assetIds: string[];
 };

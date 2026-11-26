@@ -4,29 +4,38 @@ import 'package:flutter/services.dart';
 import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/raw_jpeg_pair.model.dart';
+import 'package:immich_mobile/domain/services/asset.service.dart';
+import 'package:immich_mobile/extensions/network_capability_extensions.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_album.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
+import 'package:immich_mobile/infrastructure/repositories/settings.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/trashed_local_asset.repository.dart';
+import 'package:immich_mobile/platform/connectivity_api.g.dart';
 import 'package:immich_mobile/platform/native_sync_api.g.dart';
 import 'package:logging/logging.dart';
 
 const String _kHashCancelledCode = "HASH_CANCELLED";
 
 class HashService {
+  final AssetService _assetService;
   final int _batchSize;
   final LocalAlbumRepository _localAlbumRepository;
   final LocalAssetRepository _localAssetRepository;
   final TrashedLocalAssetRepository _trashedLocalAssetRepository;
   final NativeSyncApi _nativeSyncApi;
+  final ConnectivityApi _connectivityApi;
   final Completer<void>? _cancellation;
   final _log = Logger('HashService');
 
   HashService({
+    required this._assetService,
     required this._localAlbumRepository,
     required this._localAssetRepository,
     required this._trashedLocalAssetRepository,
     required this._nativeSyncApi,
+    required this._connectivityApi,
     this._cancellation,
     int? batchSize,
   }) : _batchSize = batchSize ?? kBatchHashFileLimit {
@@ -47,13 +56,44 @@ class HashService {
       // Sorted by backupSelection followed by isCloud
       final localAlbums = await _localAlbumRepository.getBackupAlbums();
 
+      final inspected = <String>{};
       for (final album in localAlbums) {
         if (isCancelled) {
           _log.warning("Hashing cancelled. Stopped processing albums.");
           break;
         }
 
-        final assetsToHash = await _localAlbumRepository.getAssetsToHash(album.id);
+        if (CurrentPlatform.isIOS && album.backupSelection != BackupSelection.excluded) {
+          final pairs = await _localAlbumRepository.getAssetsToDiscoverRawPairs(album.id);
+          for (final asset in pairs) {
+            if (isCancelled) {
+              return;
+            }
+            if (!inspected.add(asset.id)) {
+              continue;
+            }
+            try {
+              await _assetService.prepareRawJpegPair(
+                asset,
+                allowNetworkAccess:
+                    album.backupSelection == BackupSelection.selected &&
+                    (SettingsRepository.instance.appConfig.backup.useCellularForPhotos ||
+                        (await _connectivityApi.getCapabilities()).isUnmetered),
+                cancelToken: _cancellation,
+              );
+            } catch (e, s) {
+              _log.warning('Cannot prepare original resources for ${asset.id}', e, s);
+            }
+          }
+        }
+        final assetsToHash = (await _localAlbumRepository.getAssetsToHash(album.id))
+            .where(
+              (asset) =>
+                  !CurrentPlatform.isIOS ||
+                  asset.type != AssetType.image ||
+                  asset.rawPairDiscovery == RawPairDiscovery.absent,
+            )
+            .toList();
         if (assetsToHash.isNotEmpty) {
           await _hashAssets(album, assetsToHash);
         }

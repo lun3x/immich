@@ -53,6 +53,10 @@ class UploadRepository {
     return FileDownloader().allTasks(group: group);
   }
 
+  Future<Task?> getTask(String taskId) => FileDownloader().taskForId(taskId);
+  Future<TaskRecord?> getTaskRecord(String taskId) => FileDownloader().database.recordForId(taskId);
+  Future<bool> cancelTasks(Iterable<String> taskIds) => FileDownloader().cancelTasksWithIds(taskIds);
+
   Future<void> start() {
     return FileDownloader().start();
   }
